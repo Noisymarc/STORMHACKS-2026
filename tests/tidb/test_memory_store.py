@@ -82,8 +82,10 @@ def test_search_is_limited_to_the_user(store, users):
     store.add_memory(alice, "photosynthesis")
     store.add_memory(bob, "exponential growth")
 
+    # Threshold off: alice's only memory is unrelated, but it must still be the
+    # only one returned, and bob's closer memory must never appear.
     results = store.search_relevant_memories(
-        alice, "The number of users is growing exponentially.")
+        alice, "The number of users is growing exponentially.", min_similarity=None)
 
     assert [m.user_id for m in results] == [alice]
 
