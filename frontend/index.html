@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Translator</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Live Translator</h1>
+  <div class="controls">
+    <label>Speaker language
+      <select id="src">
+        <option value="auto">Auto-detect</option><option value="en">English</option>
+        <option value="es">Spanish</option><option value="fr">French</option>
+        <option value="de">German</option><option value="zh">Chinese</option>
+        <option value="ja">Japanese</option><option value="ko">Korean</option>
+        <option value="pt">Portuguese</option><option value="ar">Arabic</option>
+        <option value="hi">Hindi</option>
+      </select>
+    </label>
+    <label>Translate to
+      <select id="tgt">
+        <option value="en">English</option><option value="es">Spanish</option>
+        <option value="fr">French</option><option value="de">German</option>
+        <option value="zh">Chinese</option><option value="ja">Japanese</option>
+        <option value="ko">Korean</option><option value="pt">Portuguese</option>
+        <option value="ar">Arabic</option><option value="hi">Hindi</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" id="speak"> Speak translation (ElevenLabs)</label>
+    <button id="toggle">Start listening</button>
+  </div>
+  <div id="status" aria-live="polite">Idle</div>
+</header>
+<main id="captions" aria-live="polite"></main>
+<footer>Tip: click a translated line to correct it — corrections teach future translations.</footer>
+<script src="app.js"></script>
+</body>
+</html>
