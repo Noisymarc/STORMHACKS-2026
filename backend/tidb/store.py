@@ -16,6 +16,12 @@ from sqlalchemy import Engine, text
 from .client import engine_from_env
 from .schema import MEMORIES_TABLE, init_schema
 
+# Titan v2 cosine similarity between a short memory ("exponential growth") and a
+# full transcript sentence is low in absolute terms: ~0.26 for the related
+# memory vs <0.08 for unrelated ones in the demo. 0.15 sits between the two.
+# Provisional; re-tune as more real memories come in.
+DEFAULT_MIN_SIMILARITY = 0.15
+
 
 @dataclass(frozen=True)
 class Memory:
@@ -105,9 +111,12 @@ class MemoryStore:
         transcript: str,
         *,
         limit: int = 5,
-        min_similarity: float | None = None,
+        min_similarity: float | None = DEFAULT_MIN_SIMILARITY,
     ) -> list[Memory]:
-        """Memories of `user_id` closest in meaning to `transcript`, closest first."""
+        """Memories of `user_id` closest in meaning to `transcript`, closest first.
+
+        Memories below `min_similarity` are dropped; pass None to keep all.
+        """
         _require_user_id(user_id)
         if not transcript or not transcript.strip():
             return []

@@ -57,10 +57,23 @@ def test_semantic_search_finds_related_memory(store, users):
     store.add_memory(alice, "latency")
 
     results = store.search_relevant_memories(
-        alice, "The number of users is growing exponentially.", limit=3)
+        alice, "The number of users is growing exponentially.", limit=3, min_similarity=None)
 
     assert results[0].content == "exponential growth"
     assert results[0].similarity > results[-1].similarity
+
+
+@needs_tidb
+def test_default_threshold_drops_unrelated_memories(store, users):
+    alice, _ = users
+    store.add_memory(alice, "exponential growth")
+    store.add_memory(alice, "photosynthesis")
+    store.add_memory(alice, "latency")
+
+    results = store.search_relevant_memories(
+        alice, "The number of users is growing exponentially.")
+
+    assert [m.content for m in results] == ["exponential growth"]
 
 
 @needs_tidb

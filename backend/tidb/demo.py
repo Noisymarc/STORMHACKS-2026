@@ -11,6 +11,7 @@ import argparse
 import uuid
 
 from . import MemoryStore
+from .store import DEFAULT_MIN_SIMILARITY
 
 ALICE_MEMORIES = [
     ("exponential growth", "Our revenue shows exponential growth."),
@@ -48,9 +49,10 @@ def main() -> None:
 
         print(f"Transcript: {TRANSCRIPT!r}")
         print(f"Relevant memories for {alice}:")
-        results = store.search_relevant_memories(alice, TRANSCRIPT, limit=5)
+        results = store.search_relevant_memories(alice, TRANSCRIPT, limit=5, min_similarity=None)
         for m in results:
-            print(f"  {m.similarity:.3f}  {m.content!r}  (user={m.user_id})")
+            mark = "kept" if m.similarity >= DEFAULT_MIN_SIMILARITY else "dropped by default"
+            print(f"  {m.similarity:.3f}  {m.content!r}  (user={m.user_id}, {mark})")
 
         assert results, "no memories returned"
         assert all(m.user_id == alice for m in results), "another user's memory leaked"
