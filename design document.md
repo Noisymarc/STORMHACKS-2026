@@ -33,3 +33,7 @@
 3. Translation & AI Context Correction: Converts source-language text to target-language text and cleans up speech anomalies (filler words, stuttering, domain-specific terminology).
 
 4. Subtitles UI Engine: Renders streaming "interim" text as the speaker is talking, then updates it to "finalized" text once a sentence or pause is completed.
+
+Language: Python
+
+API's: Google Gemini, ElevenLabs, 
