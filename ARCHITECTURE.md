@@ -2,14 +2,20 @@
 
 ```mermaid
 flowchart LR
-    A(Live Speech)
-    B[WhisperLiveKit]
+    subgraph Client
+        A(Live Speech)
+        F(Personalized Caption)
+        G(User Feedback)
+    end
+    subgraph Application Server
+        B[WhisperLiveKit]
+    end
     C(Transcript)
-    D[TiDB AI Search]
-    E[Gemini API]
-    F(Personalized Caption)
-    G(User Feedback)
-    H[(TiDB)]
+    subgraph Cloud Services
+        D[TiDB AI Search]
+        E[Gemini API]
+        H[(TiDB)]
+    end
     
     A --> B
     B --> C
@@ -25,4 +31,3 @@ flowchart LR
     G --> H
     H --> D 
 ```
-
