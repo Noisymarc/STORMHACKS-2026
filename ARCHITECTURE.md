@@ -3,7 +3,7 @@
 ```mermaid
 flowchart LR
     A(Live Speech)
-    B[WhisperLiveKit]
+    B[ElevenLabs]
     C(Transcript)
     D[TiDB AI Search]
     E[Gemini API]
