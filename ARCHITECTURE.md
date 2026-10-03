@@ -9,7 +9,7 @@ flowchart LR
     end
     C(Transcript)
     subgraph External Services
-        B[ElevenLabs]
+        B[Gemini]
         D[TiDB AI Search]
         E[Gemini API]
         H[(TiDB)]
