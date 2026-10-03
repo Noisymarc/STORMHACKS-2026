@@ -7,11 +7,9 @@ flowchart LR
         F(Personalized Caption)
         G(User Feedback)
     end
-    subgraph Application Server
-        B[WhisperLiveKit]
-    end
     C(Transcript)
-    subgraph Cloud Services
+    subgraph External Services
+        B[ElevenLabs]
         D[TiDB AI Search]
         E[Gemini API]
         H[(TiDB)]
