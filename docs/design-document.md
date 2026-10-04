@@ -66,7 +66,10 @@ Saved explanations are collapsed behind **View saved explanation**, with their o
 example. After stopping, listen without another Gemini request, or use **Explain this
 occurrence** to request fresh help for an exact term's current context. ElevenLabs generates
 speech unless cached. **My glossary** retains all saved terms and lets the student remove them.
-Old entries without translations can be upgraded on request; language never switches silently.
+Help defaults to Japanese on every page load. A different selection applies during
+that session; saved browser language preferences cannot override the Japanese default.
+Old entries without translations can be upgraded on request; audio uses the selected
+help language and Japanese speech requires Japanese explanation text.
 
 ## What each technology does
 
