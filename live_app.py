@@ -15,19 +15,26 @@ from elevenlabs import (
     RealtimeAudioOptions,
     RealtimeEvents,
 )
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, Response
 from google import genai
 from google.genai import types
+from pydantic import BaseModel
+
+from backend import tts
+from backend.gemini_resilience import ResilientGemini, is_model_not_found
 
 TARGET_LANGUAGE = "Spanish"
+TARGET_LANGUAGE_CODE = "es"
 GEMINI_MODEL = "gemini-3.1-flash-lite"
 LIVE_TRANSLATION_MODEL = "gemini-3.5-live-translate-preview"
 
 app = FastAPI(title="Live Translation Demo")
 PAGE = Path(__file__).with_name("live.html")
 gemini_client = None
+gemini_resilient = None  # retries 429s and survives a retired model
 elevenlabs_client = None
+elevenlabs_api_key = None  # used for text-to-speech
 
 # The screenshot showed a 15 requests/minute Gemini free-tier cap. A shared
 # lock and five-second gap keep one local server session under that limit.
@@ -50,15 +57,69 @@ def _field(event, name: str, default=""):
 
 def _translate(text: str) -> str:
     """Translate one current caption using the same Gemini model as the CLI demo."""
-    response = gemini_client.models.generate_content(
-        model=GEMINI_MODEL,
+    global gemini_resilient
+    if gemini_resilient is None or gemini_resilient.client is not gemini_client:
+        gemini_resilient = ResilientGemini(gemini_client, GEMINI_MODEL)
+    return gemini_resilient.generate(
         contents=(
             f"Translate the following spoken text into {TARGET_LANGUAGE}. "
             "Preserve meaning, names, and numbers. Return only the translation.\n\n"
             f"Text: {text}"
         ),
     )
-    return (response.text or "").strip()
+
+
+class TTSRequest(BaseModel):
+    text: str
+    voice_id: str | None = None
+
+
+def _tts_settings():
+    return (
+        os.getenv("ELEVENLABS_VOICE_ID", tts.DEFAULT_VOICE_ID),
+        os.getenv("ELEVENLABS_TTS_MODEL", tts.DEFAULT_MODEL),
+    )
+
+
+@app.get("/api/tts/config")
+async def tts_config():
+    voice, model = _tts_settings()
+    return {"enabled": bool(elevenlabs_api_key), "default_voice": voice, "model": model}
+
+
+@app.get("/api/voices")
+async def voices():
+    """Never fails hard: if the key cannot list voices the page still gets the default voice."""
+    voice, _ = _tts_settings()
+    default = {"id": voice, "name": "Default voice", "description": ""}
+    if not elevenlabs_api_key:
+        return {"voices": [default], "default": voice, "error": "ELEVENLABS_API_KEY not set"}
+    try:
+        found = await tts.list_voices(elevenlabs_api_key)
+    except tts.TTSError as exc:
+        return {"voices": [default], "default": voice, "error": exc.message}
+    if not any(v["id"] == voice for v in found):
+        found.insert(0, default)
+    return {"voices": found, "default": voice, "error": None}
+
+
+@app.post("/api/tts")
+async def speak(request: TTSRequest):
+    """Speak one translated phrase in the target language and return MP3 audio."""
+    if not elevenlabs_api_key:
+        raise HTTPException(503, "ELEVENLABS_API_KEY not set")
+    voice, model = _tts_settings()
+    try:
+        audio = await tts.synthesize(
+            request.text,
+            api_key=elevenlabs_api_key,
+            voice_id=request.voice_id or voice,
+            model_id=model,
+            language_code=TARGET_LANGUAGE_CODE,
+        )
+    except tts.TTSError as exc:
+        raise HTTPException(exc.status, exc.message)
+    return Response(audio, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.websocket("/ws/continuous")
@@ -80,7 +141,7 @@ async def continuous_translation(websocket: WebSocket):
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
         translation_config=types.TranslationConfig(
-            target_language_code="es",
+            target_language_code=TARGET_LANGUAGE_CODE,
             echo_target_language=True,
         ),
     )
@@ -152,10 +213,14 @@ async def continuous_translation(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     except Exception as exc:
-        with suppress(Exception):
-            await websocket.send_json(
-                {"type": "error", "message": f"Continuous translation failed: {exc}"}
+        message = f"Continuous translation failed: {exc}"
+        if is_model_not_found(exc):
+            message += (
+                f" The model '{LIVE_TRANSLATION_MODEL}' may have been retired or renamed;"
+                " update LIVE_TRANSLATION_MODEL in live_app.py."
             )
+        with suppress(Exception):
+            await websocket.send_json({"type": "error", "message": message})
             await websocket.close(code=1011)
 
 
@@ -281,7 +346,7 @@ async def live_translation(websocket: WebSocket):
 
 def main():
     """Get secrets without echoing them, then start the local web server."""
-    global gemini_client, elevenlabs_client
+    global gemini_client, elevenlabs_client, elevenlabs_api_key
     gemini_key = (
         os.getenv("GEMINI_API_KEY")
         or getpass.getpass("Gemini API key (hidden): ").strip()
@@ -293,6 +358,7 @@ def main():
     elevenlabs_client = (
         AsyncElevenLabs(api_key=elevenlabs_key) if elevenlabs_key else None
     )
+    elevenlabs_api_key = elevenlabs_key or None
 
     import uvicorn
 

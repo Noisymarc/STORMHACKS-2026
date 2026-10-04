@@ -7,10 +7,20 @@
 </head>
 <body>
   <h1>Live Translation Demo</h1>
-  <p>Gemini listens directly to your microphone and streams Spanish captions. This demo displays captions only; generated audio is not played.</p>
+  <p>Gemini listens directly to your microphone and streams Spanish captions. Gemini's own generated audio is not played; tick "Speak translation" to hear the translation in an ElevenLabs voice.</p>
 
   <button id="start-button" type="button">Start microphone</button>
   <button id="stop-button" type="button" disabled>Stop</button>
+  <fieldset>
+    <legend>Spoken translation (ElevenLabs)</legend>
+    <label><input type="checkbox" id="speak-toggle"> Speak translation</label>
+    <label>Voice <select id="voice-select"><option value="">Default</option></select></label>
+    <button id="stop-voice-button" type="button">Stop voice</button>
+    <label title="Stops the microphone from hearing the voice and translating it again. Not needed with headphones.">
+      <input type="checkbox" id="pause-mic" checked> Pause mic while speaking</label>
+    <span id="voice-note" role="status"></span>
+  </fieldset>
+
   <p id="status" role="status">Microphone is off.</p>
   <p id="error" role="alert"></p>
 
@@ -38,6 +48,135 @@
     let translationText = '';
     let pendingAudio = new Uint8Array(0);
     let ready = false;
+
+    // ---- Spoken translation (ElevenLabs) ----------------------------------
+    const speakToggle = document.querySelector('#speak-toggle');
+    const voiceSelect = document.querySelector('#voice-select');
+    const stopVoiceButton = document.querySelector('#stop-voice-button');
+    const pauseMic = document.querySelector('#pause-mic');
+    const voiceNote = document.querySelector('#voice-note');
+    const MAX_QUEUE = 3;         // keep speech near-live: drop the oldest phrase when behind
+    const ECHO_TAIL_MS = 400;    // keep the mic paused briefly after the voice stops
+    const SPEAK_IDLE_MS = 1500;  // speak the unfinished sentence if no new text arrives
+    let ttsAvailable = false;
+    let speakBuffer = '';
+    let speakTimer = null;
+    const speechQueue = [];
+    let speechBusy = false;
+    let audioPlaying = false;
+    let currentAudio = null;
+    let gateUntil = 0;
+
+    const pref = {
+      get: (key, fallback) => { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } },
+      set: (key, value) => { try { localStorage.setItem(key, value); } catch { /* storage blocked */ } },
+    };
+    const micGated = () => pauseMic.checked && (audioPlaying || performance.now() < gateUntil);
+
+    function enqueueSpeech(text) {
+      speechQueue.push(text);
+      while (speechQueue.length > MAX_QUEUE) speechQueue.shift();
+      playNextSpeech();
+    }
+
+    // Translation text streams in with no sentence boundaries: speak whole sentences as they
+    // complete, and the unfinished tail once the text has been quiet for a moment.
+    function feedSpeech(delta) {
+      if (!speakToggle.checked || !ttsAvailable) return;
+      speakBuffer += delta;
+      const done = speakBuffer.match(/^[\s\S]*[.!?…。！？]["')\]»”]*(?=\s)/);
+      if (done) {
+        enqueueSpeech(done[0].trim());
+        speakBuffer = speakBuffer.slice(done[0].length);
+      }
+      clearTimeout(speakTimer);
+      speakTimer = setTimeout(flushSpeech, SPEAK_IDLE_MS);
+    }
+
+    function flushSpeech() {
+      clearTimeout(speakTimer);
+      const rest = speakBuffer.trim();
+      speakBuffer = '';
+      if (rest && speakToggle.checked && ttsAvailable) enqueueSpeech(rest);
+    }
+
+    async function playNextSpeech() {
+      if (speechBusy || !speechQueue.length) return;
+      speechBusy = true;
+      try {
+        const response = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ text: speechQueue.shift(), voice_id: voiceSelect.value || null }),
+        });
+        if (!response.ok) {
+          let message = `Voice failed (${response.status})`;
+          try { message = (await response.json()).detail || message; } catch { /* not JSON */ }
+          voiceNote.textContent = 'Voice: ' + message;
+          return;
+        }
+        voiceNote.textContent = '';
+        const url = URL.createObjectURL(await response.blob());
+        currentAudio = new Audio(url);
+        audioPlaying = true;
+        await new Promise(resolve => {
+          currentAudio.onended = resolve;
+          currentAudio.onerror = resolve;
+          currentAudio.play().catch(() => {
+            voiceNote.textContent = 'Browser blocked audio: click the page, then try again.';
+            resolve();
+          });
+        });
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        voiceNote.textContent = 'Voice: ' + error.message;
+      } finally {
+        audioPlaying = false;
+        currentAudio = null;
+        gateUntil = performance.now() + ECHO_TAIL_MS;
+        speechBusy = false;
+        playNextSpeech();
+      }
+    }
+
+    function stopVoice() {
+      speechQueue.length = 0;
+      speakBuffer = '';
+      clearTimeout(speakTimer);
+      if (currentAudio) { currentAudio.pause(); currentAudio.dispatchEvent(new Event('ended')); }
+    }
+
+    async function initVoice() {
+      pauseMic.checked = pref.get('pauseMic', '1') === '1';
+      pauseMic.addEventListener('change', () => pref.set('pauseMic', pauseMic.checked ? '1' : '0'));
+      voiceSelect.addEventListener('change', () => pref.set('voice', voiceSelect.value));
+      stopVoiceButton.addEventListener('click', stopVoice);
+      speakToggle.addEventListener('change', () => {
+        pref.set('speak', speakToggle.checked ? '1' : '0');
+        stopVoice();  // start clean: never read out text that was already on screen
+      });
+      try {
+        ttsAvailable = (await (await fetch('/api/tts/config')).json()).enabled;
+      } catch { ttsAvailable = false; }
+      if (!ttsAvailable) {
+        for (const control of [speakToggle, voiceSelect, pauseMic, stopVoiceButton]) control.disabled = true;
+        voiceNote.textContent = 'Set ELEVENLABS_API_KEY before starting the app to enable spoken translation.';
+        return;
+      }
+      try {
+        const data = await (await fetch('/api/voices')).json();
+        voiceSelect.replaceChildren(...data.voices.map(voice => {
+          const option = document.createElement('option');
+          option.value = voice.id;
+          option.textContent = voice.name + (voice.description ? ' – ' + voice.description : '');
+          return option;
+        }));
+        const saved = pref.get('voice', '');
+        voiceSelect.value = [...voiceSelect.options].some(o => o.value === saved) ? saved : data.default;
+        if (data.error) voiceNote.textContent = `Voice list unavailable (${data.error}); using the default voice.`;
+      } catch { /* keep the "Default" option */ }
+      speakToggle.checked = pref.get('speak', '0') === '1';
+    }
 
     function sendAudio(buffer) {
       const packet = new Uint8Array(buffer);
@@ -84,6 +223,7 @@
           new Promise(resolve => closingSocket.addEventListener('close', resolve, { once: true })),
           new Promise(resolve => setTimeout(resolve, 3000)),
         ]);
+        flushSpeech();
         closingSocket.close();
       } else if (socket) socket.close();
       if (stream) stream.getTracks().forEach(track => track.stop());
@@ -107,6 +247,7 @@
       sourceText = '';
       translationText = '';
       pendingAudio = new Uint8Array(0);
+      speakBuffer = '';
       sourceCaption.textContent = '—';
       translatedCaption.textContent = '—';
 
@@ -134,6 +275,7 @@
             if (message.type === 'translation_delta') {
               translationText += message.text;
               translatedCaption.textContent = translationText;
+              feedSpeech(message.text);
             }
             if (message.type === 'error') {
               errorText.textContent = message.message;
@@ -161,7 +303,11 @@
           event.outputBuffer.getChannelData(0).fill(0);
           if (socket && socket.readyState === WebSocket.OPEN) {
             const samples = event.inputBuffer.getChannelData(0);
-            sendAudio(convertToPcm16(samples, audioContext.sampleRate));
+            const pcm = convertToPcm16(samples, audioContext.sampleRate);
+            // While the voice plays, send silence (not nothing) so the stream stays continuous
+            // and the microphone cannot hear the translation and translate it again.
+            if (micGated()) new Uint8Array(pcm).fill(0);
+            sendAudio(pcm);
           }
         };
         microphone.connect(audioProcessor);
@@ -175,6 +321,7 @@
       }
     }
 
+    initVoice();
     startButton.addEventListener('click', startMicrophone);
     stopButton.addEventListener('click', stopMicrophone);
   </script>
