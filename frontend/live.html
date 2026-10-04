@@ -15,6 +15,7 @@
         <p>English speech · Japanese captions</p>
       </div>
       <div class="session-controls" aria-label="Microphone controls">
+        <button id="paste-transcript-button" type="button" aria-expanded="false" aria-controls="transcript-import">Paste transcript</button>
         <button id="start-button" class="primary-button" type="button">Start microphone</button>
         <button id="stop-button" type="button" disabled>Stop</button>
       </div>
@@ -26,6 +27,21 @@
       <p id="status" role="status" aria-atomic="true">Microphone is off.</p>
       <p id="error" class="error-message" role="alert"></p>
     </div>
+
+    <section id="transcript-import" class="transcript-import" aria-labelledby="transcript-import-heading" hidden>
+      <h2 id="transcript-import-heading">Translate a transcript</h2>
+      <p id="transcript-import-hint" class="supporting-text">Paste text or upload a UTF-8 .txt file. Up to 20,000 characters. Translation replaces the current reading panes.</p>
+      <label for="transcript-input">Transcript</label>
+      <textarea id="transcript-input" rows="6" aria-describedby="transcript-import-hint transcript-import-error"></textarea>
+      <label for="transcript-file">Upload a transcript (.txt)</label>
+      <input id="transcript-file" type="file" accept=".txt,text/plain" aria-describedby="transcript-import-hint transcript-import-error">
+      <div class="transcript-actions">
+        <button id="translate-transcript-button" class="primary-button" type="button" disabled>Translate to Japanese</button>
+        <button id="close-transcript-button" type="button">Close</button>
+      </div>
+      <p id="transcript-import-status" class="supporting-text" role="status"></p>
+      <p id="transcript-import-error" class="error-message" role="alert"></p>
+    </section>
 
     <div class="workspace-grid">
       <div class="lecture-column">
@@ -118,6 +134,15 @@
     const glossaryList = document.querySelector('#glossary-list');
     const activeHelpStatus = document.querySelector('#active-help-status');
     const languageCodes = { Japanese: 'ja', French: 'fr', Arabic: 'ar', Hindi: 'hi', English: 'en' };
+    const pasteTranscriptButton = document.querySelector('#paste-transcript-button');
+    const transcriptImport = document.querySelector('#transcript-import');
+    const transcriptInput = document.querySelector('#transcript-input');
+    const transcriptFile = document.querySelector('#transcript-file');
+    const translateTranscriptButton = document.querySelector('#translate-transcript-button');
+    const closeTranscriptButton = document.querySelector('#close-transcript-button');
+    const transcriptImportStatus = document.querySelector('#transcript-import-status');
+    const transcriptImportError = document.querySelector('#transcript-import-error');
+    const MAX_TRANSCRIPT_CHARACTERS = 20000;
 
     // Each reading pane follows new text until the reader scrolls back or focuses
     // a saved phrase. Batch layout work into one frame per pane.
@@ -172,6 +197,9 @@
     let selectedPhrase = '';
     let selectedContext = '';
     let explaining = false;
+    let transcriptBusy = false;
+    let transcriptInputVersion = 0;
+    let clipboardReadVersion = 0;
     const explanationCache = new Map();
     let demoUserId = null;
     let savedMemories = [];
@@ -523,7 +551,150 @@
 
     function updateExplainButton() {
       explainButton.disabled = explaining || startButton.disabled || !selectedPhrase;
+      updateTranscriptControls();
     }
+
+    function updateTranscriptControls() {
+      const unavailable = transcriptBusy || startButton.disabled || explaining;
+      pasteTranscriptButton.disabled = unavailable;
+      transcriptInput.disabled = unavailable;
+      transcriptFile.disabled = unavailable;
+      closeTranscriptButton.disabled = transcriptBusy;
+      const length = transcriptInput.value.trim().length;
+      translateTranscriptButton.disabled = unavailable || !length || transcriptInput.value.length > MAX_TRANSCRIPT_CHARACTERS || transcriptInput.getAttribute('aria-invalid') === 'true';
+      transcriptImport.setAttribute('aria-busy', String(transcriptBusy));
+    }
+
+    function validateTranscript(text) {
+      if (!text.trim()) throw new Error('Paste or upload a transcript with some text.');
+      if (text.length > MAX_TRANSCRIPT_CHARACTERS) throw new Error('This transcript exceeds 20,000 characters. Use a shorter section.');
+      if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/u.test(text)) throw new Error('The transcript must contain plain text. Choose a UTF-8 .txt file.');
+    }
+
+    function setTranscriptBusy(busy) {
+      transcriptBusy = busy;
+      startButton.disabled = busy;
+      explanationLanguage.disabled = busy;
+      updateExplainButton();
+    }
+
+    pasteTranscriptButton.addEventListener('click', async () => {
+      const inputVersion = transcriptInputVersion;
+      const clipboardVersion = ++clipboardReadVersion;
+      transcriptImport.hidden = false;
+      pasteTranscriptButton.setAttribute('aria-expanded', 'true');
+      transcriptImportError.textContent = '';
+      transcriptImportStatus.textContent = 'Paste your transcript below, or choose a .txt file.';
+      transcriptInput.focus();
+      try {
+        if (!navigator.clipboard?.readText) throw new Error('Clipboard unavailable');
+        const text = await navigator.clipboard.readText();
+        if (transcriptImport.hidden || startButton.disabled || explaining || inputVersion !== transcriptInputVersion || clipboardVersion !== clipboardReadVersion) return;
+        if (!text.trim()) return;
+        transcriptInput.value = text;
+        transcriptInput.dispatchEvent(new Event('input'));
+      } catch {
+        if (!transcriptImport.hidden && inputVersion === transcriptInputVersion && clipboardVersion === clipboardReadVersion) transcriptImportStatus.textContent = 'Paste directly into the Transcript field (Ctrl+V or your device’s Paste action), or choose a .txt file.';
+      }
+    });
+
+    closeTranscriptButton.addEventListener('click', () => {
+      transcriptImport.hidden = true;
+      pasteTranscriptButton.setAttribute('aria-expanded', 'false');
+      pasteTranscriptButton.focus();
+    });
+
+    transcriptInput.addEventListener('input', () => {
+      transcriptInputVersion += 1;
+      transcriptImportError.textContent = '';
+      transcriptInput.removeAttribute('aria-invalid');
+      if (transcriptInput.value.trim()) {
+        try { validateTranscript(transcriptInput.value); }
+        catch (error) {
+          transcriptImportError.textContent = error.message;
+          transcriptInput.setAttribute('aria-invalid', 'true');
+        }
+      }
+      transcriptImportStatus.textContent = `${transcriptInput.value.length.toLocaleString()} / 20,000 characters`;
+      updateTranscriptControls();
+    });
+
+    transcriptFile.addEventListener('change', async () => {
+      const file = transcriptFile.files[0];
+      if (!file || startButton.disabled || explaining) return;
+      transcriptInputVersion += 1;
+      transcriptImportError.textContent = '';
+      transcriptFile.removeAttribute('aria-invalid');
+      setTranscriptBusy(true);
+      try {
+        if (!/\.txt$/i.test(file.name)) throw new Error('Choose a UTF-8 .txt transcript file.');
+        if (file.size > 100000) throw new Error('The file exceeds 100 KB. Upload a smaller .txt file.');
+        const text = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer());
+        validateTranscript(text);
+        transcriptInput.value = text;
+        transcriptInput.dispatchEvent(new Event('input'));
+        transcriptImportStatus.textContent = `${file.name} loaded. Click Translate to Japanese.`;
+      } catch (error) {
+        transcriptImportError.textContent = error instanceof TypeError ? 'The file must be UTF-8 plain text.' : error.message;
+        transcriptFile.setAttribute('aria-invalid', 'true');
+      } finally {
+        transcriptFile.value = '';
+        setTranscriptBusy(false);
+        transcriptInput.focus();
+      }
+    });
+
+    translateTranscriptButton.addEventListener('click', async () => {
+      if (translateTranscriptButton.disabled) return;
+      transcriptImportError.textContent = '';
+      try { validateTranscript(transcriptInput.value); }
+      catch (error) { transcriptImportError.textContent = error.message; return; }
+      setTranscriptBusy(true);
+      transcriptImportStatus.textContent = 'Translating into Japanese…';
+      try {
+        const response = await postJson('/api/translate-transcript', { transcript: transcriptInput.value });
+        const result = await response.json();
+        if (result.language !== 'Japanese' || typeof result.translation !== 'string' || !result.translation.trim() || typeof result.transcript !== 'string') {
+          throw new Error('The server returned an invalid translation. Please retry.');
+        }
+        memorySession += 1;
+        selectedPhrase = '';
+        selectedContext = '';
+        selectedPhraseText.textContent = 'None';
+        explanationText.textContent = '';
+        phraseTranslation.textContent = '';
+        explanationStatus.textContent = '';
+        explanationError.textContent = '';
+        explanationAudio.pause();
+        explanationAudio.removeAttribute('src');
+        explanationAudio.hidden = true;
+        for (const entry of explanationCache.values()) if (entry.audioUrl) URL.revokeObjectURL(entry.audioUrl);
+        explanationCache.clear();
+        semanticMemories = [];
+        semanticSentenceStart = -1;
+        focusedMemoryId = null;
+        sourceText = result.transcript;
+        translationText = result.translation;
+        sourceUpdatedAt = performance.now();
+        lastTranscriptSignature = '';
+        lastSearchText = '';
+        lastSearchAt = -Infinity;
+        translatedCaption.textContent = translationText;
+        captionViews.forEach(view => view.reset());
+        matchKnownPhrases();
+        renderGlossary();
+        transcriptImportStatus.textContent = 'Translation ready. Select words in the original transcript for an explanation.';
+        statusText.textContent = 'Transcript translated · microphone is off.';
+        transcriptImport.hidden = true;
+        pasteTranscriptButton.setAttribute('aria-expanded', 'false');
+        document.querySelector('#translation-scroll').focus({ preventScroll: true });
+      } catch (error) {
+        transcriptImportError.textContent = error.message;
+        transcriptImportStatus.textContent = 'Your input and the previous reading panes have been kept. Retry when ready.';
+      } finally {
+        setTranscriptBusy(false);
+      }
+    });
 
     function captureSelection() {
       if (startButton.disabled || explaining) return;
@@ -585,6 +756,7 @@
       startButton.disabled = true;
       explanationLanguage.disabled = true;
       explainButton.disabled = true;
+      updateTranscriptControls();
       explanationError.textContent = '';
       explanationText.textContent = '';
       phraseTranslation.textContent = '';
@@ -730,6 +902,9 @@
     }
 
     async function startMicrophone() {
+      if (transcriptBusy) return;
+      transcriptImport.hidden = true;
+      pasteTranscriptButton.setAttribute('aria-expanded', 'false');
       errorText.textContent = '';
       statusText.textContent = 'Requesting microphone access…';
       startButton.disabled = true;
@@ -874,6 +1049,7 @@
       loadSavedMemories();
     });
     loadSavedMemories();
+    updateTranscriptControls();
     setInterval(matchKnownPhrases, 500);
     setInterval(searchRelatedMemories, 100);
   </script>
