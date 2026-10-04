@@ -152,7 +152,8 @@ Paraphrases may be missed; they are suggestions, not guaranteed matches.
    in the background. Check the **My glossary** status for confirmation.
 3. Start a new session in the same browser. Your saved concepts load automatically.
 4. Repeat a saved phrase to see a highlighted term and its short translation under
-   **Phrase help**, or use related wording to see a **Possibly related** suggestion.
+   **Phrase help**, or use related wording (for example "growing exponentially" for
+   "exponential growth") to see **Same idea as …** with those words highlighted.
 5. Open **View saved explanation**. After stopping the microphone, click
    **Listen to saved explanation**. This reuses
    the saved text without a Gemini explanation request. ElevenLabs generates audio
@@ -169,12 +170,31 @@ updates. Active help follows the current sentence and clears after 12 seconds of
 silence while listening. Historical highlights remain clickable. Meaning-based searches
 use TiDB in the background, at most one ongoing
 search per page and no more frequently than every 2.5 seconds. Unchanged text is
-not searched again. Captions do not wait for search results; no Gemini generation
-requests are added for matching. TiDB search still has network/model latency and
-usage limits. Its provisional similarity threshold needs testing with real lectures.
+not searched again. Captions do not wait for search results. TiDB search still has
+network/model latency and usage limits.
 
-Full Japanese captions remain enabled. Exact terms are highlighted, while semantic
-suggestions do not claim a precise matching location. Saved explanations show their
+### Checking related wording with Gemini
+
+TiDB's meaning search also matches sentences that only share words ("The train arrived
+late" for "latency") or a neighbouring topic. When it finds candidates for the current
+sentence, one small Gemini request checks whether the sentence really uses each saved
+concept and returns the words that express it. Confirmed matches are highlighted and
+labelled **Same idea as …**; rejected ones are hidden. Sentences without candidates make
+no Gemini request, and repeated checks of the same sentence reuse the earlier answer.
+
+To protect the Gemini quota shared with captions and explanations, checks are capped
+(set in `.env`): `CONCEPT_JUDGE_PER_MINUTE` (default 4) and `CONCEPT_JUDGE_DAILY_LIMIT`
+(default 150 per server run per UTC day). After a rate-limit error, checks pause for a minute.
+`CONCEPT_JUDGE=off` disables them. Whenever a check is off, over a cap or fails, the page
+falls back to unchecked **Possibly related** suggestions above a stricter similarity.
+
+`scripts/eval_search.py` (TiDB) and `scripts/eval_need.py` (Gemini, same prompt as the app)
+measure this. On their sample sentences, single-sentence search at similarity 0.12 found
+20 of 22 related memories and the Gemini check judged 25 of 25 candidates correctly.
+These are small hand-written samples, not real lecture transcripts.
+
+Full Japanese captions remain enabled. Exact terms and Gemini-confirmed wording are
+highlighted; unchecked **Possibly related** suggestions do not claim a precise location. Saved explanations show their
 original example because they can be unsuitable in a different context. For an exact
 term, **Explain this occurrence** requests a fresh translation/explanation using the
 current lecture context after stopping. **Remove from glossary** retires a saved entry;
@@ -223,7 +243,9 @@ There is no local database backup if a cloud save fails.
   returns a string `id`. Repeated saves of the same normalized phrase/language update a row
   in the normal single-client flow; simultaneous clients can still create duplicates.
 - `POST /api/memories/search` accepts `user_id`, `language` and `transcript` (up to 600 characters);
-  filters by language before ranking related memories. It uses TiDB's semantic search, not Gemini.
+  filters by language before ranking related memories with TiDB's semantic search. Each result
+  adds `confirmed` (`true` when Gemini confirmed it, with `expression` = the matching words;
+  `null` when unchecked). Candidates Gemini rejected are omitted.
 - `DELETE /api/memories/<id>?user_id=<uuid>` retires only that demo user's entry.
 - The demo remains local and has no authentication. Configure access controls before public deployment.
 

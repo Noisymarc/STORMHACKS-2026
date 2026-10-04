@@ -107,6 +107,8 @@
     let lastHelpSignature = '';
     let lastTranscriptSignature = '';
     let transcriptSpans = [];
+    // Gemini-confirmed paraphrases of saved phrases, as offsets into sourceText.
+    let paraphraseSpans = [];
     const forgettingIds = new Set();
     const matchedMemories = new Map();
     try {
@@ -162,6 +164,30 @@
       return selected;
     }
 
+    function withParaphrases(spans) {
+      // Exact glossary matches win; confirmed paraphrases fill the gaps.
+      const live = new Map(selectedLanguageMemories().map(memory => [memory.id, memory]));
+      const merged = [...spans];
+      for (const span of paraphraseSpans) {
+        const memory = live.get(span.memory.id);
+        if (!memory || merged.some(other => span.start < other.end && other.start < span.end)) continue;
+        merged.push({ ...span, memory });
+      }
+      return merged.sort((a, b) => a.start - b.start);
+    }
+
+    function rememberParaphrases(memories, sentenceStart) {
+      const lower = sourceText.toLowerCase();
+      for (const memory of memories) {
+        if (!memory.confirmed || !memory.expression) continue;
+        const start = lower.indexOf(memory.expression.toLowerCase(), sentenceStart);
+        if (start < 0) continue;
+        const end = start + memory.expression.length;
+        if (paraphraseSpans.some(span => start < span.end && span.start < end)) continue;
+        paraphraseSpans.push({ start, end, memory, paraphrase: true });
+      }
+    }
+
     function showSavedHelp(memory) {
       focusedMemoryId = memory.id;
       renderRememberedHelp();
@@ -169,13 +195,14 @@
 
     function renderTranscript() {
       const signature = JSON.stringify([sourceText, explanationLanguage.value,
-        selectedLanguageMemories().map(memory => [memory.id, memory.phrase, memory.translation])]);
+        selectedLanguageMemories().map(memory => [memory.id, memory.phrase, memory.translation]),
+        paraphraseSpans.map(span => [span.start, span.end, span.memory.id])]);
       if (signature === lastTranscriptSignature) return;
       lastTranscriptSignature = signature;
       const focusedKey = document.activeElement?.dataset.glossaryKey;
       const fragment = document.createDocumentFragment();
       let offset = 0;
-      transcriptSpans = glossarySpans(sourceText);
+      transcriptSpans = withParaphrases(glossarySpans(sourceText));
       for (const span of transcriptSpans) {
         fragment.append(document.createTextNode(sourceText.slice(offset, span.start)));
         const mark = document.createElement('mark');
@@ -183,9 +210,13 @@
         button.type = 'button';
         button.textContent = sourceText.slice(span.start, span.end);
         button.dataset.glossaryKey = `${span.memory.id}:${span.start}`;
-        button.setAttribute('aria-label', `${button.textContent}: view saved help in ${explanationLanguage.value}`);
+        button.setAttribute('aria-label', span.paraphrase
+          ? `${button.textContent}: same idea as saved phrase ${span.memory.phrase}; view saved help in ${explanationLanguage.value}`
+          : `${button.textContent}: view saved help in ${explanationLanguage.value}`);
         button.setAttribute('aria-controls', 'memory-matches');
-        button.title = span.memory.translation || `Saved explanation in ${explanationLanguage.value}`;
+        button.title = span.paraphrase
+          ? `Same idea as "${span.memory.phrase}"${span.memory.translation ? `: ${span.memory.translation}` : ''}`
+          : span.memory.translation || `Saved explanation in ${explanationLanguage.value}`;
         button.addEventListener('click', () => showSavedHelp(span.memory));
         button.addEventListener('focus', () => showSavedHelp(span.memory));
         button.addEventListener('mouseenter', () => showSavedHelp(span.memory));
@@ -353,7 +384,8 @@
       const expanded = new Set([...memoryMatches.querySelectorAll('details[open]')].map(details => details.dataset.memoryId));
       const focusedKey = document.activeElement?.dataset.helpKey;
       memoryMatches.replaceChildren(...matches.map(({ memory, exact }) => savedHelpItem(memory,
-        exact === null ? 'Selected saved phrase' : exact ? 'Recognized in this sentence' : 'Possibly related to this sentence')));
+        exact === null ? 'Selected saved phrase' : exact ? 'Recognized in this sentence'
+          : memory.confirmed ? `Same idea as "${memory.expression || memory.phrase}" in this sentence` : 'Possibly related to this sentence')));
       for (const details of memoryMatches.querySelectorAll('details')) details.open = expanded.has(details.dataset.memoryId);
       if (focusedKey) [...memoryMatches.querySelectorAll('[data-help-key]')].find(control => control.dataset.helpKey === focusedKey)?.focus({ preventScroll: true });
       activeHelpStatus.textContent = matches.length ? `Saved help in ${explanationLanguage.value}. Explanations use the saved example, so check that they fit this lecture.` : 'No remembered phrases in the current sentence.';
@@ -417,6 +449,7 @@
         if (session !== memorySession || language !== explanationLanguage.value || currentSentenceStart() !== sentenceStart) return;
         semanticMemories = result.memories.filter(memory => !forgettingIds.has(memory.id) && selectedLanguageMemories().some(saved => saved.id === memory.id));
         semanticSentenceStart = sentenceStart;
+        rememberParaphrases(semanticMemories, sentenceStart);
         matchKnownPhrases();
       } catch (error) {
         if (session === memorySession) memoryError.textContent = error.message;
@@ -638,6 +671,7 @@
       matchedMemories.clear();
       semanticMemories = [];
       semanticSentenceStart = -1;
+      paraphraseSpans = [];
       focusedMemoryId = null;
       lastSearchText = '';
       lastSearchAt = -Infinity;
@@ -758,6 +792,7 @@
       savedMemories = [];
       semanticMemories = [];
       semanticSentenceStart = -1;
+      paraphraseSpans = [];
       focusedMemoryId = null;
       lastSearchText = '';
       lastSearchAt = -Infinity;

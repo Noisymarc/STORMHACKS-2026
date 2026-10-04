@@ -11,6 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from .concept_judge import judge as concept_judge
 from .tidb import MemoryStore
 
 router = APIRouter(prefix="/api/memories")
@@ -18,6 +19,11 @@ store = None
 store_lock = asyncio.Lock()
 logger = logging.getLogger("uvicorn.error")
 LANGUAGES = {"Japanese": "ja", "French": "fr", "Arabic": "ar", "Hindi": "hi", "English": "en"}
+# Measured with scripts/eval_search.py (single-sentence queries): 0.12 finds 20/22
+# related memories but also passes look-alikes, which Gemini then rejects (see
+# backend/concept_judge.py). Without that check, only 0.15+ is shown (17/22, fewer look-alikes).
+CANDIDATE_SIMILARITY = 0.12
+UNCHECKED_SIMILARITY = 0.15
 
 
 def configured():
@@ -135,14 +141,33 @@ async def save_phrase(request: SaveMemory):
 
 @router.post("/search")
 async def search_saved(request: SearchMemory):
+    """Related glossary entries for the current sentence.
+
+    Each result has `confirmed`: true when Gemini agreed the sentence uses the concept
+    (with `expression`, the words that express it), or null when it was not checked.
+    Entries Gemini rejected are left out.
+    """
     code = language_code(request.language)
     database = await get_store()
-    if not request.transcript.strip():
+    transcript = request.transcript.strip()
+    if not transcript:
         return {"memories": []}
     memories = await run_database(lambda: database.search_relevant_memories(
-        str(request.user_id), request.transcript, limit=3, target_lang=code,
+        str(request.user_id), transcript, limit=3, target_lang=code,
+        min_similarity=CANDIDATE_SIMILARITY,
     ))
-    return {"memories": [public_memory(memory) for memory in memories]}
+    verdicts = await concept_judge.judge(
+        transcript, [(str(memory.id), memory.content, memory.context) for memory in memories])
+    results = []
+    for memory in memories:
+        if verdicts is None:
+            if memory.similarity >= UNCHECKED_SIMILARITY:
+                results.append({**public_memory(memory), "confirmed": None, "expression": ""})
+            continue
+        same, expression = verdicts[str(memory.id)]
+        if same:
+            results.append({**public_memory(memory), "confirmed": True, "expression": expression})
+    return {"memories": results}
 
 
 @router.delete("/{memory_id}")

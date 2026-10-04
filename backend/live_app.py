@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+from .concept_judge import judge as concept_judge
 from .memory_api import router as memory_router
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -437,6 +438,7 @@ def main():
     if not gemini_key:
         raise SystemExit("A Gemini API key is required to start the live demo.")
     gemini_client = genai.Client(api_key=gemini_key)
+    concept_judge.configure(gemini_client, GEMINI_MODEL)
     elevenlabs_client = (
         AsyncElevenLabs(api_key=elevenlabs_key) if elevenlabs_key else None
     )
