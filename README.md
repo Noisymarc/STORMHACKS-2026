@@ -8,6 +8,7 @@ Reading all live translations aloud is a planned feature.
 ## Current features
 
 - Live original transcript and Japanese captions.
+- Paste a transcript or upload a UTF-8 `.txt` file and translate it into Japanese.
 - Select a confusing phrase after stopping to get a translation and spoken explanation.
 - Save phrases in a personal glossary and highlight exact terms in later speech.
 - Show short help in the selected language; expand explanations when needed.
@@ -15,6 +16,36 @@ Reading all live translations aloud is a planned feature.
 
 The glossary code has syntax and structure checks. Its full microphone/AI/database
 flow still needs a demo trial; merging the code does not verify those runtime results.
+
+## Translate a pasted or uploaded transcript
+
+With the microphone stopped, click **Paste transcript**. Clipboard text is loaded
+when the browser permits it; otherwise paste directly into the labeled field.
+Alternatively choose a UTF-8 `.txt` file, then click **Translate to Japanese**.
+The original and translation replace the reading panes only after a successful
+response. Select words in the imported original to use the existing explanations
+and glossary. Starting the microphone begins a new lecture and clears those panes.
+
+The limit is 20,000 characters and 100 KB per file. Longer material should be split
+into sections. Failed requests preserve the input and previous reading panes.
+PDF, Word and audio uploads are not supported by this text input.
+
+`POST /api/translate-transcript` accepts `{"transcript": "lecture text"}` and
+returns `transcript`, `translation` and `language` (`Japanese`). It uses the
+existing Gemini key/model; it needs neither a microphone nor ElevenLabs.
+The submitted full transcript is not saved to TiDB; selected phrases are saved
+through the existing glossary flow. Generation still uses the Gemini API.
+
+Checks with existing environments:
+
+```powershell
+& ".\.venv\Scripts\python.exe" -m unittest discover -s tests -p test_transcript_translation.py -v
+& "C:\Users\shabd\.config\opencode\runtimes\webapp-testing\Scripts\python.exe" tests/ui/verify_workspace.py
+```
+
+These checks use simulated Gemini output; they do not establish real translation
+quality. API implementation follows the [official Python SDK](https://googleapis.github.io/python-genai/#generate-content-asynchronous-non-streaming).
+Clipboard fallback follows [browser clipboard permissions](https://developer.mozilla.org/en-US/docs/Web/API/Clipboard/readText).
 
 ## Repository layout
 

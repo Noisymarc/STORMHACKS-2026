@@ -6,6 +6,7 @@ Artifacts are saved outside the repository, under the system temporary directory
 """
 
 import io
+import asyncio
 import json
 import math
 import os
@@ -41,13 +42,26 @@ def serve(port):
     app.mount("/static", backend.StaticFiles(directory=REPO / "frontend"), name="static")
     app.post("/api/explain")(backend.explain_phrase)
     app.post("/api/explanation-audio")(backend.explanation_audio)
+    app.post("/api/translate-transcript")(backend.translate_transcript)
     state = {"database_failure": False, "explanation_failure": False,
-             "audio_failure": False, "explanation_calls": 0, "audio_calls": 0}
+             "audio_failure": False, "explanation_calls": 0, "audio_calls": 0,
+             "translation_failure": False, "translation_calls": 0}
     memories = {}
     connections = set()
 
     class FakeModels:
         async def generate_content(self, **kwargs):
+            if kwargs["config"].response_mime_type != "application/json":
+                state["translation_calls"] += 1
+                await asyncio.sleep(0.4)
+                if state["translation_failure"]:
+                    error = RuntimeError("Simulated translation quota failure")
+                    error.code = 429
+                    raise error
+                return backend.types.GenerateContentResponse(candidates=[backend.types.Candidate(
+                    content=backend.types.Content(parts=[backend.types.Part(text=TRANSLATION)]),
+                    finish_reason=backend.types.FinishReason.STOP,
+                )])
             state["explanation_calls"] += 1
             if state["explanation_failure"]:
                 error = RuntimeError("Simulated quota failure")
@@ -147,7 +161,7 @@ def serve(port):
 
     @app.post("/__ui/state")
     async def configure_fixture(body: dict):
-        for key in ("database_failure", "explanation_failure", "audio_failure"):
+        for key in ("database_failure", "explanation_failure", "audio_failure", "translation_failure"):
             if key in body:
                 state[key] = bool(body[key])
         return state
@@ -375,6 +389,88 @@ def verify():
             page.wait_for_function("!document.querySelector('#start-button').disabled")
             assert page.locator("#error").inner_text() and "機会費用" in page.locator("#translated-caption").inner_text()
             passed("Caption disconnect preserves text and restores microphone controls")
+
+            api.post("/__ui/state", data={"database_failure": False, "explanation_failure": False, "audio_failure": False})
+            page.reload()
+            page.wait_for_function("document.querySelector('#memory-status').textContent.includes('saved')")
+            page.evaluate("""() => Object.defineProperty(navigator, 'clipboard', {
+                configurable: true, value: {readText: async () => {throw new DOMException('Blocked', 'NotAllowedError');}}
+            })""")
+            page.locator("#paste-transcript-button").click()
+            page.wait_for_function("document.querySelector('#transcript-import-status').textContent.includes('Ctrl+V')")
+            assert page.locator("#transcript-input").evaluate("node => node === document.activeElement")
+            assert page.locator("#translate-transcript-button").is_disabled()
+            passed("Paste opens a labeled editor; blocked clipboard access permits manual paste; empty input cannot submit")
+
+            page.evaluate("""() => {navigator.clipboard.readText = () => new Promise(resolve => {window.resolvePendingPaste = resolve;});}""")
+            page.locator("#paste-transcript-button").click()
+            page.locator("#transcript-input").fill("New text typed while clipboard permission was pending.")
+            page.evaluate("async () => {window.resolvePendingPaste('Old clipboard text'); await Promise.resolve();}")
+            assert page.locator("#transcript-input").input_value() == "New text typed while clipboard permission was pending."
+            passed("A delayed clipboard response cannot overwrite newer manual input")
+
+            page.evaluate("""text => {navigator.clipboard.readText = async () => text;}""", SOURCE)
+            page.locator("#paste-transcript-button").click()
+            page.wait_for_function("text => document.querySelector('#transcript-input').value === text", arg=SOURCE)
+            page.locator("#translate-transcript-button").click()
+            assert page.locator("#start-button").is_disabled()
+            assert page.locator("#translate-transcript-button").is_disabled()
+            page.wait_for_function("document.querySelector('#status').textContent.includes('Transcript translated')")
+            assert page.locator("#source-caption").inner_text() == SOURCE
+            assert page.locator("#translated-caption").inner_text() == TRANSLATION
+            assert api.get("/__ui/state").json()["translation_calls"] == 1
+            select_phrase(page, "opportunity cost")
+            page.locator("#explain-button").click()
+            page.wait_for_function("document.querySelector('#explanation-status').textContent.includes('Explanation ready')")
+            assert "機会費用" in page.locator("#explanation-text").inner_text()
+            passed("Clipboard transcript translates through the actual handler; duplicate submission is blocked; phrase explanations remain usable")
+
+            page.locator("#paste-transcript-button").click()
+            page.locator("#transcript-file").set_input_files({"name": "lecture.txt", "mimeType": "text/plain", "buffer": SOURCE.encode("utf-8")})
+            page.wait_for_function("document.querySelector('#transcript-import-status').textContent.includes('lecture.txt loaded')")
+            page.locator("#translate-transcript-button").click()
+            page.wait_for_function("document.querySelector('#transcript-import').hidden")
+            assert api.get("/__ui/state").json()["translation_calls"] == 2
+            passed("UTF-8 .txt upload loads the full text and translates into the reading panes")
+
+            page.locator("#paste-transcript-button").click()
+            page.locator("#transcript-input").fill("This replacement transcript should be retained after a provider failure.")
+            api.post("/__ui/state", data={"translation_failure": True})
+            page.locator("#translate-transcript-button").click()
+            page.wait_for_function("document.querySelector('#transcript-import-error').textContent.includes('usage limit')")
+            assert page.locator("#source-caption").inner_text() == SOURCE
+            assert "replacement transcript" in page.locator("#transcript-input").input_value()
+            assert page.locator("#translate-transcript-button").is_enabled()
+            passed("Translation quota failure preserves editable input and previous captions and enables retry")
+
+            for name, data, error_text in (
+                ("lecture.pdf", b"not a text file", "UTF-8 .txt"),
+                ("lecture.txt", b"", "some text"),
+                ("lecture.txt", b"\xff\xfe", "UTF-8 plain text"),
+                ("lecture.txt", b"a" * 100001, "100 KB"),
+            ):
+                page.locator("#transcript-file").set_input_files({"name": name, "mimeType": "text/plain", "buffer": data})
+                page.wait_for_function("text => document.querySelector('#transcript-import-error').textContent.includes(text)", arg=error_text)
+                assert "replacement transcript" in page.locator("#transcript-input").input_value()
+            page.locator("#transcript-input").fill("a" * 20001)
+            assert len(page.locator("#transcript-input").input_value()) == 20001
+            assert "20,000" in page.locator("#transcript-import-error").inner_text()
+            assert page.locator("#translate-transcript-button").is_disabled()
+            passed("Invalid, empty, non-UTF-8 and oversized uploads are rejected; overlong paste is retained rather than truncated")
+
+            page.locator("#transcript-input").fill(SOURCE)
+            page.set_viewport_size({"width": 375, "height": 900})
+            assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
+            page.locator("#status").evaluate("node => node.textContent = 'Simulated transcript · browser verification'")
+            page.screenshot(path=str(out / "transcript-editor-mobile.png"), full_page=True)
+            page.locator("#close-transcript-button").click()
+            assert page.locator("#paste-transcript-button").evaluate("node => node === document.activeElement")
+            page.locator("#start-button").click()
+            page.wait_for_function("!document.querySelector('#stop-button').disabled")
+            assert page.locator("#paste-transcript-button").is_disabled()
+            page.locator("#stop-button").click()
+            page.wait_for_function("!document.querySelector('#paste-transcript-button').disabled")
+            passed("Transcript editor fits mobile, returns focus when closed and cannot replace an active microphone session")
             assert not report["console_errors"], report["console_errors"]
             passed("No uncaught browser exceptions")
             context.close()
