@@ -43,6 +43,14 @@
   <p id="memory-error" role="alert"></p>
   <ul id="memory-matches"></ul>
 
+  <h3>Dictionary file</h3>
+  <p>Download your saved phrases as a text file, or import one from another device. Imported phrases are added to this browser's saved phrases; ones you already have are skipped.</p>
+  <button id="dictionary-export-button" type="button" disabled>Download dictionary (.txt)</button>
+  <label for="dictionary-import-file">Import dictionary file</label>
+  <input id="dictionary-import-file" type="file" accept=".txt,text/plain" disabled>
+  <p id="dictionary-status" role="status"></p>
+  <p id="dictionary-error" role="alert"></p>
+
   <script>
     const startButton = document.querySelector('#start-button');
     const stopButton = document.querySelector('#stop-button');
@@ -60,6 +68,10 @@
     const memoryStatus = document.querySelector('#memory-status');
     const memoryError = document.querySelector('#memory-error');
     const memoryMatches = document.querySelector('#memory-matches');
+    const dictionaryExportButton = document.querySelector('#dictionary-export-button');
+    const dictionaryImportFile = document.querySelector('#dictionary-import-file');
+    const dictionaryStatus = document.querySelector('#dictionary-status');
+    const dictionaryError = document.querySelector('#dictionary-error');
 
     let socket = null;
     let stream = null;
@@ -144,7 +156,55 @@
         memoryStatus.textContent = 'Saved help is unavailable; captions and explanations still work.';
         memoryError.textContent = error.message;
       }
+      updateDictionaryControls();
     }
+
+    // ---- Dictionary file: copy the saved phrases to/from a text file -----------------------
+    function updateDictionaryControls() {
+      const available = memoriesEnabled && !!demoUserId;
+      dictionaryExportButton.disabled = !available;
+      dictionaryImportFile.disabled = !available;
+    }
+
+    dictionaryExportButton.addEventListener('click', async () => {
+      dictionaryError.textContent = '';
+      dictionaryStatus.textContent = 'Preparing the dictionary file…';
+      try {
+        const response = await fetch(`/api/memories/export?user_id=${encodeURIComponent(demoUserId)}`);
+        if (!response.ok) {
+          const problem = await response.json().catch(() => ({}));
+          throw new Error(typeof problem.detail === 'string' ? problem.detail : `Download failed (HTTP ${response.status}).`);
+        }
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(await response.blob());
+        link.download = `dictionary-${new Date().toISOString().slice(0, 10)}.txt`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+        dictionaryStatus.textContent = 'Dictionary file downloaded. Import it on another device to copy your saved phrases.';
+      } catch (error) {
+        dictionaryStatus.textContent = '';
+        dictionaryError.textContent = error instanceof TypeError ? 'Could not reach the server. Check that live_app.py is running.' : error.message;
+      }
+    });
+
+    dictionaryImportFile.addEventListener('change', async () => {
+      const file = dictionaryImportFile.files[0];
+      if (!file) return;
+      dictionaryError.textContent = '';
+      dictionaryStatus.textContent = 'Importing…';
+      try {
+        if (file.size > 1000000) throw new Error('That file is too large for the browser (limit 1 MB). Use the command line import instead.');
+        const response = await postJson('/api/memories/import', { user_id: demoUserId, text: await file.text() });
+        const result = await response.json();
+        dictionaryStatus.textContent = `Imported ${result.added} phrase(s); ${result.skipped_duplicates} were already saved.`;
+        await loadSavedMemories();
+      } catch (error) {
+        dictionaryStatus.textContent = '';
+        dictionaryError.textContent = error.message;
+      } finally {
+        dictionaryImportFile.value = '';   // allow choosing the same file again
+      }
+    });
 
     function matchKnownPhrases() {
       const windowText = ` ${normalized(sourceText.slice(-600))} `;

@@ -4,12 +4,14 @@ import asyncio
 import logging
 import os
 import uuid
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
-from .tidb import MemoryStore
+from .tidb import MemoryStore, dictionary
 
 router = APIRouter(prefix="/api/memories")
 store = None
@@ -69,6 +71,17 @@ class SaveMemory(BaseModel):
     language: str
 
 
+# Browser imports run inside run_database()'s 20-second limit, so they are capped; bigger files
+# go through the command line (python -m backend.tidb.dictionary import FILE), which has no limit.
+MAX_IMPORT_ENTRIES = 200
+MAX_IMPORT_CHARS = 1_000_000
+
+
+class ImportDictionary(BaseModel):
+    user_id: UUID
+    text: str = Field(min_length=1, max_length=MAX_IMPORT_CHARS)
+
+
 class SearchMemory(BaseModel):
     user_id: UUID
     transcript: str = Field(min_length=1, max_length=600)
@@ -105,6 +118,33 @@ async def save_phrase(request: SaveMemory):
             metadata={"language": request.language},
         ))
     return {"id": await run_database(save)}
+
+
+@router.get("/export")
+async def export_dictionary(user_id: UUID):
+    """The user's saved phrases as a plain text file that /import (or the command line) can read."""
+    database = await get_store()
+    content = await run_database(lambda: dictionary.export_dictionary(database, str(user_id)))
+    return PlainTextResponse(content, media_type="text/plain; charset=utf-8", headers={
+        "Content-Disposition": f'attachment; filename="dictionary-{date.today().isoformat()}.txt"',
+        "Cache-Control": "no-store",
+    })
+
+
+@router.post("/import")
+async def import_dictionary(request: ImportDictionary):
+    """Add the phrases in a dictionary file to this user. Already-saved phrases are skipped."""
+    parsed = dictionary.parse_dictionary(request.text)
+    if parsed.fatal or parsed.errors:
+        shown = "; ".join(parsed.errors[:5]) + (f" (+{len(parsed.errors) - 5} more)" if len(parsed.errors) > 5 else "")
+        raise HTTPException(422, f"Nothing was imported. The file has problems: {shown}")
+    if len(parsed.entries) > MAX_IMPORT_ENTRIES:
+        raise HTTPException(422, f"The file has {len(parsed.entries)} phrases; the browser imports up to "
+                                 f"{MAX_IMPORT_ENTRIES}. Use: python -m backend.tidb.dictionary import FILE --user-id {request.user_id}")
+    database = await get_store()
+    result = await run_database(lambda: dictionary.import_entries(
+        database, parsed.entries, user_id=str(request.user_id)))
+    return {"added": result.added, "skipped_duplicates": result.skipped_duplicates}
 
 
 @router.post("/search")
