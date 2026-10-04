@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Translation Demo</title>
+</head>
+<body>
+  <h1>Live Translation Demo</h1>
+  <p>Gemini listens directly to your microphone and streams Japanese captions. Gemini's own generated audio is not played; tick "Speak translation" to hear the captions read aloud in an ElevenLabs voice. Headphones are recommended so the microphone keeps listening to the lecture while the voice plays.</p>
+
+  <button id="start-button" type="button">Start microphone</button>
+  <button id="stop-button" type="button" disabled>Stop</button>
+  <fieldset>
+    <legend>Spoken translation (ElevenLabs)</legend>
+    <label><input type="checkbox" id="speak-toggle"> Speak translation</label>
+    <label>Voice <select id="voice-select"><option value="">Default</option></select></label>
+    <button id="stop-voice-button" type="button">Stop voice</button>
+    <br>
+    <label title="Only if you hear feedback and have no headphones. Words spoken while the voice plays will NOT be captured or translated.">
+      <input type="checkbox" id="pause-mic"> Pause microphone while the voice plays (loses words spoken meanwhile)</label>
+    <span id="voice-note" role="status"></span>
+  </fieldset>
+
+  <p id="status" role="status">Microphone is off.</p>
+  <p id="error" role="alert"></p>
+
+  <h2>Transcript</h2>
+  <p id="source-caption" aria-live="polite">—</p>
+
+  <h2>Japanese translation</h2>
+  <p id="translated-caption" aria-live="polite">—</p>
+
+  <h2>Explain a phrase</h2>
+  <p>After stopping the microphone, select words in the original transcript, then click Explain.</p>
+  <p>Selected phrase: <span id="selected-phrase">None</span></p>
+  <label for="explanation-language">Explanation language</label>
+  <select id="explanation-language">
+    <option>Japanese</option>
+    <option>French</option>
+    <option>Arabic</option>
+    <option>Hindi</option>
+    <option>English</option>
+  </select>
+  <button id="explain-button" type="button" disabled>Explain and listen</button>
+  <p id="explanation-status" role="status"></p>
+  <p id="explanation-error" role="alert"></p>
+  <p id="explanation-text" aria-live="polite"></p>
+  <audio id="explanation-audio" controls hidden></audio>
+
+  <script src="speech.js"></script>
+  <script>
+    const startButton = document.querySelector('#start-button');
+    const stopButton = document.querySelector('#stop-button');
+    const statusText = document.querySelector('#status');
+    const errorText = document.querySelector('#error');
+    const sourceCaption = document.querySelector('#source-caption');
+    const translatedCaption = document.querySelector('#translated-caption');
+    const selectedPhraseText = document.querySelector('#selected-phrase');
+    const explanationLanguage = document.querySelector('#explanation-language');
+    const explainButton = document.querySelector('#explain-button');
+    const explanationStatus = document.querySelector('#explanation-status');
+    const explanationError = document.querySelector('#explanation-error');
+    const explanationText = document.querySelector('#explanation-text');
+    const explanationAudio = document.querySelector('#explanation-audio');
+
+    let socket = null;
+    let stream = null;
+    let audioContext = null;
+    let microphone = null;
+    let audioProcessor = null;
+    let stopping = false;
+    let sourceText = '';
+    let translationText = '';
+    let pendingAudio = new Uint8Array(0);
+    let ready = false;
+    let selectedPhrase = '';
+    let selectedContext = '';
+    let explaining = false;
+    const explanationCache = new Map();
+
+    function updateExplainButton() {
+      explainButton.disabled = explaining || startButton.disabled || !selectedPhrase;
+    }
+
+    function captureSelection() {
+      if (startButton.disabled || explaining) return;
+      const selection = window.getSelection();
+      if (!selection || !selection.rangeCount) return;
+      const range = selection.getRangeAt(0);
+      if (!sourceCaption.contains(range.startContainer) || !sourceCaption.contains(range.endContainer)) return;
+      const phrase = selection.toString().trim();
+      if (!phrase) return;
+      if (phrase.length > 300) {
+        explanationError.textContent = 'Select a shorter phrase (up to 300 characters).';
+        selectedPhrase = '';
+        selectedPhraseText.textContent = 'None';
+        updateExplainButton();
+        return;
+      }
+      const prefix = range.cloneRange();
+      prefix.selectNodeContents(sourceCaption);
+      prefix.setEnd(range.startContainer, range.startOffset);
+      const offset = prefix.toString().length;
+      selectedPhrase = phrase;
+      selectedContext = sourceCaption.textContent.slice(
+        Math.max(0, offset - 300), Math.min(sourceCaption.textContent.length, offset + range.toString().length + 300)
+      );
+      selectedPhraseText.textContent = phrase;
+      explanationError.textContent = '';
+      updateExplainButton();
+    }
+
+    async function postJson(url, payload, cancelSignal) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60000);
+      if (cancelSignal) cancelSignal.addEventListener('abort', () => controller.abort(), { once: true });
+      try {
+        const response = await fetch(url, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload), signal: controller.signal,
+        });
+        if (!response.ok) {
+          const problem = await response.json().catch(() => ({}));
+          throw new Error(typeof problem.detail === 'string' ? problem.detail : `Request failed (HTTP ${response.status}). Try again.`);
+        }
+        return response;
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          if (cancelSignal && cancelSignal.aborted) throw error;  // cancelled by the user (Stop voice)
+          throw new Error('The request timed out. Check the server and retry.');
+        }
+        if (error instanceof TypeError) throw new Error('Could not reach the server. Check that live_app.py is running.');
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    async function explainSelection() {
+      if (explainButton.disabled) return;
+      explaining = true;
+      startButton.disabled = true;
+      explanationLanguage.disabled = true;
+      explainButton.disabled = true;
+      explanationError.textContent = '';
+      explanationText.textContent = '';
+      explanationAudio.pause();
+      explanationAudio.hidden = true;
+      const language = explanationLanguage.value;
+      const key = JSON.stringify([selectedPhrase, selectedContext, language]);
+      let entry = explanationCache.get(key);
+      try {
+        if (!entry) {
+          explanationStatus.textContent = 'Creating an explanation…';
+          const response = await postJson('/api/explain', {
+            phrase: selectedPhrase, context: selectedContext, language,
+          });
+          const result = await response.json();
+          if (result.language !== language) throw new Error('The server returned the wrong explanation language. Restart the server and retry.');
+          entry = { explanation: result.explanation, audioUrl: null };
+          explanationCache.set(key, entry);
+        }
+        explanationText.textContent = entry.explanation;
+        if (!entry.audioUrl) {
+          explanationStatus.textContent = 'Creating spoken explanation…';
+          const response = await postJson('/api/explanation-audio', {
+            explanation: entry.explanation, language,
+          });
+          entry.audioUrl = URL.createObjectURL(await response.blob());
+        }
+        explanationAudio.src = entry.audioUrl;
+        explanationAudio.hidden = false;
+        explanationStatus.textContent = 'Explanation ready. Repeated clicks reuse this session’s result.';
+        try { await explanationAudio.play(); }
+        catch { explanationStatus.textContent = 'Explanation ready. Press Play to listen.'; }
+      } catch (error) {
+        console.error('Phrase explanation failed:', error.message);
+        explanationError.textContent = error.message;
+        explanationStatus.textContent = entry ? 'Text is ready. Click Explain again to retry the audio.' : '';
+      } finally {
+        explaining = false;
+        startButton.disabled = false;
+        explanationLanguage.disabled = false;
+        updateExplainButton();
+      }
+    }
+
+
+    // ---- Spoken translation (ElevenLabs) ----------------------------------------------
+    // Sentence splitting, the echo guard and the playback queue live in speech.js.
+    const speakToggle = document.querySelector('#speak-toggle');
+    const voiceSelect = document.querySelector('#voice-select');
+    const stopVoiceButton = document.querySelector('#stop-voice-button');
+    const pauseMic = document.querySelector('#pause-mic');
+    const voiceNote = document.querySelector('#voice-note');
+    const SPEAK_IDLE_MS = 1500;   // speak the unfinished sentence once the text has been quiet this long
+    const ECHO_TAIL_MS = 400;     // only used by the optional "pause microphone" mode
+    let ttsAvailable = false;
+    let speakBuffer = '';
+    let speakTimer = null;
+    let audioPlaying = false;
+    let gateUntil = 0;
+    const recentSpoken = [];
+
+    const pref = {
+      get: (key, fallback) => { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } },
+      set: (key, value) => { try { localStorage.setItem(key, value); } catch { /* storage blocked */ } },
+    };
+    // Off by default: the microphone keeps listening while the voice plays.
+    const micGated = () => pauseMic.checked && (audioPlaying || performance.now() < gateUntil);
+
+    const speechQueue = new Speech.SpeechQueue({
+      synthesize: async (text, signal) => {
+        const response = await postJson('/api/tts', { text, voice_id: voiceSelect.value || null }, signal);
+        return URL.createObjectURL(await response.blob());
+      },
+      play: (url, register) => new Promise(resolve => {
+        const audio = new Audio(url);
+        audio.onended = resolve;
+        audio.onerror = resolve;
+        register(() => { audio.pause(); resolve(); });
+        audio.play().catch(error => {
+          if (error.name !== 'AbortError') voiceNote.textContent = 'Browser blocked audio: click the page, then try again.';
+          resolve();
+        });
+      }),
+      release: url => URL.revokeObjectURL(url),
+      onError: error => { voiceNote.textContent = 'Voice: ' + error.message; },
+      onPlaying: playing => {
+        if (playing) voiceNote.textContent = '';
+        audioPlaying = playing;
+        if (!playing) gateUntil = performance.now() + ECHO_TAIL_MS;
+      },
+    });
+
+    // Translation text streams in with no sentence boundaries. Speak each sentence as it
+    // completes (Japanese 。！？ need no following space) and the unfinished tail once the
+    // text has been quiet for a moment.
+    function takeSpeech(force) {
+      const { chunks, rest } = Speech.splitSpeech(speakBuffer, { force });
+      speakBuffer = rest;
+      for (const chunk of chunks) {
+        // If the microphone hears our own voice, Gemini "translates" it back into Japanese.
+        // Recognise that and do not speak it again.
+        if (Speech.isEcho(chunk, recentSpoken)) continue;
+        Speech.rememberSpoken(recentSpoken, chunk);
+        speechQueue.enqueue(chunk);
+      }
+    }
+
+    function feedSpeech(delta) {
+      if (!speakToggle.checked || !ttsAvailable) return;
+      speakBuffer += delta;
+      takeSpeech(false);
+      clearTimeout(speakTimer);
+      speakTimer = setTimeout(() => takeSpeech(true), SPEAK_IDLE_MS);
+    }
+
+    function stopVoice() {
+      clearTimeout(speakTimer);
+      speakBuffer = '';
+      speechQueue.stop();   // clears the queue, cancels a request still loading, cuts current audio
+    }
+
+    async function initVoice() {
+      pauseMic.checked = pref.get('pauseMic', '0') === '1';
+      pauseMic.addEventListener('change', () => pref.set('pauseMic', pauseMic.checked ? '1' : '0'));
+      voiceSelect.addEventListener('change', () => pref.set('voice', voiceSelect.value));
+      stopVoiceButton.addEventListener('click', stopVoice);
+      speakToggle.addEventListener('change', () => {
+        pref.set('speak', speakToggle.checked ? '1' : '0');
+        stopVoice();  // start clean: never read out text that was already on screen
+      });
+      try {
+        ttsAvailable = (await (await fetch('/api/tts/config')).json()).enabled;
+      } catch { ttsAvailable = false; }
+      if (!ttsAvailable) {
+        for (const control of [speakToggle, voiceSelect, pauseMic, stopVoiceButton]) control.disabled = true;
+        voiceNote.textContent = 'Restart the server with an ElevenLabs API key to enable spoken translation.';
+        return;
+      }
+      try {
+        const data = await (await fetch('/api/voices')).json();
+        voiceSelect.replaceChildren(...data.voices.map(voice => {
+          const option = document.createElement('option');
+          option.value = voice.id;
+          option.textContent = voice.name + (voice.description ? ' – ' + voice.description : '');
+          return option;
+        }));
+        const saved = pref.get('voice', '');
+        voiceSelect.value = [...voiceSelect.options].some(o => o.value === saved) ? saved : data.default;
+        if (data.error) voiceNote.textContent = `Voice list unavailable (${data.error}); using the default voice.`;
+      } catch { /* keep the "Default" option */ }
+      speakToggle.checked = pref.get('speak', '0') === '1';
+    }
+
+    function sendAudio(buffer) {
+      const packet = new Uint8Array(buffer);
+      const combined = new Uint8Array(pendingAudio.length + packet.length);
+      combined.set(pendingAudio);
+      combined.set(packet, pendingAudio.length);
+      let offset = 0;
+      // 100 ms of mono PCM16 at 16 kHz = 3200 bytes.
+      while (combined.length - offset >= 3200) {
+        socket.send(combined.slice(offset, offset + 3200));
+        offset += 3200;
+      }
+      pendingAudio = combined.slice(offset);
+    }
+
+    function convertToPcm16(samples, inputRate, outputRate = 16000) {
+      const ratio = inputRate / outputRate;
+      const outputLength = Math.floor(samples.length / ratio);
+      const buffer = new ArrayBuffer(outputLength * 2);
+      const view = new DataView(buffer);
+
+      for (let i = 0; i < outputLength; i++) {
+        const start = Math.floor(i * ratio);
+        const end = Math.min(Math.floor((i + 1) * ratio), samples.length);
+        let sum = 0;
+        for (let j = start; j < end; j++) sum += samples[j];
+        const sample = Math.max(-1, Math.min(1, sum / Math.max(1, end - start)));
+        view.setInt16(i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      }
+
+      return buffer;
+    }
+
+    async function stopMicrophone() {
+      stopping = true;
+      if (audioProcessor) audioProcessor.disconnect();
+      if (microphone) microphone.disconnect();
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        if (pendingAudio.length) socket.send(pendingAudio);
+        socket.send('stop');
+        statusText.textContent = 'Finishing the last captions…';
+        const closingSocket = socket;
+        await Promise.race([
+          new Promise(resolve => closingSocket.addEventListener('close', resolve, { once: true })),
+          new Promise(resolve => setTimeout(resolve, 3000)),
+        ]);
+        takeSpeech(true);
+        closingSocket.close();
+      } else if (socket) socket.close();
+      if (stream) stream.getTracks().forEach(track => track.stop());
+      if (audioContext && audioContext.state !== 'closed') await audioContext.close();
+
+      socket = null;
+      stream = null;
+      audioContext = null;
+      microphone = null;
+      audioProcessor = null;
+      startButton.disabled = false;
+      stopButton.disabled = true;
+      statusText.textContent = 'Microphone is off.';
+      updateExplainButton();
+    }
+
+    async function startMicrophone() {
+      errorText.textContent = '';
+      startButton.disabled = true;
+      stopping = false;
+      selectedPhrase = '';
+      selectedContext = '';
+      selectedPhraseText.textContent = 'None';
+      explanationText.textContent = '';
+      explanationError.textContent = '';
+      explanationStatus.textContent = '';
+      explanationAudio.pause();
+      explanationAudio.removeAttribute('src');
+      explanationAudio.hidden = true;
+      for (const entry of explanationCache.values()) {
+        if (entry.audioUrl) URL.revokeObjectURL(entry.audioUrl);
+      }
+      explanationCache.clear();
+      updateExplainButton();
+      ready = false;
+      sourceText = '';
+      translationText = '';
+      pendingAudio = new Uint8Array(0);
+      speakBuffer = '';
+      sourceCaption.textContent = '—';
+      translatedCaption.textContent = '—';
+
+      try {
+        // Echo cancellation lets the microphone keep listening to the lecturer while the voice plays
+        // (it removes this page's own audio output from the recording).
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        audioContext = new AudioContext();
+        await audioContext.resume();
+
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        socket = new WebSocket(`${protocol}//${location.host}/ws/continuous`);
+        socket.binaryType = 'arraybuffer';
+
+        await new Promise((resolve, reject) => {
+          socket.onmessage = event => {
+            let message;
+            try {
+              message = JSON.parse(event.data);
+              if (!message || typeof message.type !== 'string') throw new Error('Missing event type');
+            } catch (error) {
+              console.error('Invalid live-caption message:', error.message);
+              errorText.textContent = 'The server sent an invalid caption update. Stop and restart the microphone.';
+              reject(new Error(errorText.textContent));
+              stopMicrophone();
+              return;
+            }
+            if (message.type === 'status') {
+              statusText.textContent = message.message;
+              ready = true;
+              resolve();
+            }
+            if (message.type === 'source_delta') {
+              sourceText += message.text;
+              sourceCaption.textContent = sourceText;
+            }
+            if (message.type === 'translation_delta') {
+              translationText += message.text;
+              translatedCaption.textContent = translationText;
+              feedSpeech(message.text);
+            }
+            if (message.type === 'error') {
+              errorText.textContent = message.message;
+              reject(new Error(message.message));
+            }
+          };
+          socket.onerror = () => {
+            errorText.textContent = 'The live connection failed. Check the server output.';
+            reject(new Error(errorText.textContent));
+          };
+          socket.onclose = () => {
+            if (!stopping) {
+              reject(new Error(errorText.textContent || 'The live connection closed.'));
+              if (ready) {
+                if (!errorText.textContent) errorText.textContent = 'The live connection closed.';
+                stopMicrophone();
+              }
+            }
+          };
+        });
+
+        microphone = audioContext.createMediaStreamSource(stream);
+        audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+        audioProcessor.onaudioprocess = event => {
+          event.outputBuffer.getChannelData(0).fill(0);
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            const samples = event.inputBuffer.getChannelData(0);
+            const pcm = convertToPcm16(samples, audioContext.sampleRate);
+            // Optional mode only: send silence (not nothing) while the voice plays.
+            if (micGated()) new Uint8Array(pcm).fill(0);
+            sendAudio(pcm);
+          }
+        };
+        microphone.connect(audioProcessor);
+        audioProcessor.connect(audioContext.destination);
+
+        statusText.textContent = 'Listening…';
+        stopButton.disabled = false;
+      } catch (error) {
+        console.error('Microphone session failed:', error.message);
+        errorText.textContent = error.message;
+        await stopMicrophone();
+      }
+    }
+
+    initVoice();
+    startButton.addEventListener('click', startMicrophone);
+    stopButton.addEventListener('click', stopMicrophone);
+    document.addEventListener('mouseup', captureSelection);
+    document.addEventListener('keyup', captureSelection);
+    explainButton.addEventListener('click', explainSelection);
+    explanationLanguage.addEventListener('change', () => {
+      explanationAudio.pause();
+      explanationAudio.removeAttribute('src');
+      explanationAudio.hidden = true;
+      explanationText.textContent = '';
+      explanationError.textContent = '';
+      explanationStatus.textContent = `Click Explain and listen to get an explanation in ${explanationLanguage.value}.`;
+    });
+  </script>
+</body>
+</html>

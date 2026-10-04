@@ -9,8 +9,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import live_app
-from backend import tts
+from backend import live_app, tts
 
 VOICE = "JBFqnCBsd6RMkjVDRZzb"
 
@@ -143,7 +142,7 @@ def test_tts_endpoint_success_and_error(client, monkeypatch):
     monkeypatch.setattr(live_app.tts, "synthesize", fake)
     r = client.post("/api/tts", json={"text": "hola", "voice_id": "customvoice1"})
     assert r.status_code == 200 and r.content == b"AUDIO" and r.headers["content-type"] == "audio/mpeg"
-    assert captured["voice_id"] == "customvoice1" and captured["language_code"] == "es"
+    assert captured["voice_id"] == "customvoice1" and captured["language_code"] == "ja"  # target language is Japanese
     client.post("/api/tts", json={"text": "hola"})            # falls back to the configured voice
     assert captured["voice_id"] == tts.DEFAULT_VOICE_ID
 
@@ -152,7 +151,42 @@ def test_tts_endpoint_success_and_error(client, monkeypatch):
 
     monkeypatch.setattr(live_app.tts, "synthesize", boom)
     r = client.post("/api/tts", json={"text": "hola"})
-    assert r.status_code == 429 and r.json()["detail"] == "slow down"
+    # upstream problems carry a reference ID that matches a server-log line (as provider_failure does)
+    assert r.status_code == 429 and r.json()["detail"].startswith("slow down Reference: ")
+
+    async def bad_input(text, **kw):
+        raise tts.TTSError(422, "invalid voice id")
+
+    monkeypatch.setattr(live_app.tts, "synthesize", bad_input)
+    r = client.post("/api/tts", json={"text": "hola"})
+    assert r.status_code == 422 and r.json()["detail"] == "invalid voice id"   # no reference for user errors
+
+    async def unexpected(text, **kw):
+        raise RuntimeError("secret-key-in-message")
+
+    monkeypatch.setattr(live_app.tts, "synthesize", unexpected)
+    r = client.post("/api/tts", json={"text": "hola"})
+    assert r.status_code == 502 and "secret-key-in-message" not in r.text and "Reference:" in r.json()["detail"]
+
+
+def test_request_validation(client):
+    assert client.post("/api/tts", json={"text": ""}).status_code == 422
+    assert client.post("/api/tts", json={"text": "あ" * 1001}).status_code == 422
+    assert client.post("/api/tts", json={}).status_code == 422
+
+
+def test_page_and_speech_script_are_served(client):
+    page = client.get("/")
+    assert page.status_code == 200 and '<script src="speech.js">' in page.text
+    script = client.get("/speech.js")
+    assert script.status_code == 200 and "javascript" in script.headers["content-type"]
+    assert "SpeechQueue" in script.text
+
+
+def test_existing_explanation_endpoints_are_untouched(client):
+    # validation still comes from main's request models
+    assert client.post("/api/explain", json={"phrase": "x", "context": "y", "language": "Japanese"}).status_code in (422, 503)
+    assert client.post("/api/explanation-audio", json={"explanation": "", "language": "Japanese"}).status_code == 422
 
 
 def test_voices_endpoint_falls_back_to_default_voice(client, monkeypatch):

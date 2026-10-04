@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
-import live_app
+from backend import live_app
 from backend.gemini_resilience import ResilientGemini, is_model_not_found, is_rate_limit, pick_model
 
 

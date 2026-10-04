@@ -1,7 +1,9 @@
 from getpass import getpass
+import os
 from google import genai
 from pathlib import Path
 from elevenlabs.client import ElevenLabs
+from dotenv import load_dotenv
 
 
 def translate(client, text, target_language):
@@ -43,7 +45,8 @@ def make_speech(client, text):
     return output_path.resolve()
 
 
-api_key = getpass("Gemini API key: ").strip()
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+api_key = (os.getenv("GEMINI_API_KEY") or "").strip() or getpass("Gemini API key: ").strip()
 client = genai.Client(api_key=api_key)
 
 while True:
