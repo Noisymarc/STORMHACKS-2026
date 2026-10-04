@@ -140,7 +140,9 @@
           const response = await postJson('/api/explain', {
             phrase: selectedPhrase, context: selectedContext, language,
           });
-          entry = { explanation: (await response.json()).explanation, audioUrl: null };
+          const result = await response.json();
+          if (result.language !== language) throw new Error('The server returned the wrong explanation language. Restart the server and retry.');
+          entry = { explanation: result.explanation, audioUrl: null };
           explanationCache.set(key, entry);
         }
         explanationText.textContent = entry.explanation;
@@ -335,6 +337,14 @@
     document.addEventListener('mouseup', captureSelection);
     document.addEventListener('keyup', captureSelection);
     explainButton.addEventListener('click', explainSelection);
+    explanationLanguage.addEventListener('change', () => {
+      explanationAudio.pause();
+      explanationAudio.removeAttribute('src');
+      explanationAudio.hidden = true;
+      explanationText.textContent = '';
+      explanationError.textContent = '';
+      explanationStatus.textContent = `Click Explain and listen to get an explanation in ${explanationLanguage.value}.`;
+    });
   </script>
 </body>
 </html>

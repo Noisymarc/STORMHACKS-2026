@@ -6,6 +6,7 @@ import getpass
 import json
 import logging
 import os
+import re
 import time
 import traceback
 import uuid
@@ -91,10 +92,17 @@ async def explain_phrase(request: ExplanationRequest):
     try:
         result = await asyncio.wait_for(gemini_client.aio.models.generate_content(
             model=GEMINI_MODEL,
-            contents=json.dumps({"phrase": phrase, "context": context}, ensure_ascii=False),
+            contents=json.dumps({
+                "phrase": phrase, "context": context,
+                "output_language": request.language,
+            }, ensure_ascii=False),
             config=types.GenerateContentConfig(
                 system_instruction=(
-                    f"Explain the selected phrase in {request.language} for a student. "
+                    f"Write the entire explanation in {request.language}, regardless of the input language. "
+                    "Do not answer in English unless English is the requested output language. "
+                    "For Japanese, use natural Japanese written in kana and kanji, not romaji. "
+                    "You may quote the original technical term, but explain it in the requested language. "
+                    "Explain the selected phrase for a student. "
                     "Use the surrounding context to interpret it. Give 2-3 short sentences "
                     "and a simple example if helpful, at most 100 words. Explain the meaning, "
                     "not just a translation. If context is insufficient, say so. "
@@ -109,6 +117,8 @@ async def explain_phrase(request: ExplanationRequest):
             raise HTTPException(502, "Gemini returned an empty explanation. Try again.")
         if len(explanation) > 1600:
             raise HTTPException(502, "The explanation was too long. Try again.")
+        if request.language == "Japanese" and not re.search(r"[\u3040-\u30ff\u3400-\u9fff]", explanation):
+            raise HTTPException(502, "Gemini did not return Japanese text. No audio was generated. Please retry.")
         return {"phrase": phrase, "language": request.language, "explanation": explanation}
     except HTTPException:
         raise
@@ -121,6 +131,8 @@ async def explanation_audio(request: ExplanationAudioRequest):
     """Speak an explanation; separate endpoint allows audio-only retries."""
     if not request.explanation.strip():
         raise HTTPException(422, "The explanation cannot be blank.")
+    if request.language == "Japanese" and not re.search(r"[\u3040-\u30ff\u3400-\u9fff]", request.explanation):
+        raise HTTPException(422, "Japanese speech requires Japanese explanation text. Generate the explanation again.")
     if elevenlabs_client is None:
         raise HTTPException(503, "Restart the server and enter an ElevenLabs API key to hear explanations.")
     try:
