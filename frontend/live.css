@@ -11,6 +11,9 @@
   --accent-soft: #ccfbf1;
   --error: #9f1239;
   --error-surface: #fff1f2;
+  --radius-control: 8px;
+  --radius-section: 12px;
+  --radius-workspace: 16px;
   --font: "Noto Sans JP", "Yu Gothic", "Hiragino Sans", sans-serif;
 }
 
@@ -26,7 +29,7 @@ button, select, summary { min-height: 44px; }
 button {
   padding: 9px 15px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: var(--surface);
   color: var(--text);
   font-weight: 600;
@@ -48,12 +51,12 @@ button:disabled { cursor: not-allowed; color: var(--text-secondary); background:
 .workspace { max-width: 1440px; margin: 0 auto; padding: 20px 32px 32px; }
 .session-status { margin-bottom: 20px; }
 #status { font-weight: 600; }
-.workspace-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 340px); align-items: start; border: 1px solid var(--border); background: var(--surface); }
+.workspace-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 340px); align-items: start; border: 1px solid var(--border); border-radius: var(--radius-workspace); overflow: hidden; background: var(--surface); }
 .lecture-column, .help-column { min-width: 0; }
 .help-column { border-left: 1px solid var(--border); }
 .caption-panel { padding: 24px; }
 .section-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; min-height: 44px; }
-.caption-scroll { overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; overscroll-behavior: contain; overflow-anchor: none; padding: 4px 12px 8px 4px; }
+.caption-scroll { overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; overscroll-behavior: contain; overflow-anchor: none; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius-section); background: var(--surface); }
 .caption-scroll p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .translation-scroll { height: clamp(240px, 36vh, 390px); }
 #translated-caption { font-size: clamp(24px, 2.2vw, 30px); line-height: 1.9; font-weight: 500; line-break: strict; }
@@ -65,7 +68,7 @@ button:disabled { cursor: not-allowed; color: var(--text-secondary); background:
 .help-settings, .help-section { padding: 24px; }
 .help-settings { background: var(--surface-soft); }
 .help-settings label { display: block; font-weight: 600; margin-bottom: 8px; }
-select { width: 100%; padding: 8px 36px 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+select { width: 100%; padding: 8px 36px 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--text); }
 .help-settings p, .supporting-text { font-size: 14px; color: var(--text-secondary); line-height: 1.65; }
 .help-settings p { margin-top: 8px; }
 .help-section { border-top: 1px solid var(--border); }
@@ -74,7 +77,7 @@ select { width: 100%; padding: 8px 36px 8px 12px; border: 1px solid var(--border
 .selected-phrase { font-size: 18px; font-weight: 600; overflow-wrap: anywhere; margin-bottom: 16px; }
 #explain-button { width: 100%; }
 .supporting-text:not(:empty), .error-message:not(:empty) { margin-top: 12px; }
-.error-message:not(:empty) { padding: 12px; border-left: 3px solid var(--error); background: var(--error-surface); color: var(--error); overflow-wrap: anywhere; font-size: 14px; }
+.error-message:not(:empty) { padding: 12px; border-left: 3px solid var(--error); border-radius: 0 var(--radius-control) var(--radius-control) 0; background: var(--error-surface); color: var(--error); overflow-wrap: anywhere; font-size: 14px; }
 .phrase-translation:not(:empty) { font-size: 22px; font-weight: 700; margin-top: 20px; overflow-wrap: anywhere; }
 .explanation-text:not(:empty) { margin-top: 12px; line-height: 1.9; overflow-wrap: anywhere; }
 audio { display: block; width: 100%; margin-top: 16px; }

@@ -38,8 +38,9 @@ below are specific to our working lecture flow.
 | Error | `#9f1239` on `#fff1f2` | Actionable failures |
 
 Palette derives from the Frost Bright family; semantic roles are defined once in
-`frontend/live.css`. Use a 4/8/12/16/20/24/32px spacing scale, 6px button corners,
-simple borders and no decorative animations or shadows.
+`frontend/live.css`. Use a 4/8/12/16/20/24/32px spacing scale, 8px control,
+12px caption-pane and 16px workspace corners, simple borders and no decorative
+animations or shadows.
 
 ## Typography
 
