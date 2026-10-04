@@ -1,8 +1,8 @@
 # Live lecture translation
 
 Our goal is real-time translation with personalized help for concepts the user
-finds confusing. The current demo provides live captions and spoken explanations
-on demand. TiDB now supports saved confusing concepts and remembered-help suggestions.
+finds confusing. The demo provides live captions and spoken explanations on demand.
+A personal glossary stores confusing phrases, short translations and explanations in TiDB.
 Reading all live translations aloud is a planned feature.
 
 ## Repository layout
@@ -105,17 +105,19 @@ explanations, but required for remembering confusing phrases.
 
 1. Click **Start microphone**, allow microphone access, and speak in English.
    The original transcript stays in English; translated captions appear in Japanese.
-2. Click **Stop** and wait until the page says **Microphone is off**.
+2. Choose a **Help language** (Japanese by default). Live captions remain Japanese.
+   Click **Stop** and wait until the page says **Microphone is off**.
    Then select a confusing phrase in the original transcript. Selection while listening is disabled.
-3. Choose an explanation language (Japanese by default) and click **Explain and listen**.
-4. Read Gemini's short explanation and hear ElevenLabs speak it. Use the audio
+3. Click **Explain and listen**.
+4. Read Gemini's short phrase translation and explanation, and hear ElevenLabs speak the explanation. Use the audio
    controls if the browser blocks automatic playback.
 
 Repeated requests for the same selected phrase, surrounding context and language
 reuse the explanation and audio in browser memory. Starting a new microphone
 session clears those results. If speech fails, the explanation text remains and
 clicking again retries just the audio.
-Phrase selection is manual text selection; automatic hover highlighting is future work.
+New phrases are selected manually. Saved phrases are highlighted automatically in
+the original transcript; click, hover or focus a highlighted term to see its saved help.
 
 ## Remember confusing phrases with TiDB
 
@@ -126,26 +128,37 @@ Do not overwrite your Gemini/ElevenLabs keys when adding database settings.
 The app creates the memories table if it is missing.
 
 1. Stop recording, select a phrase and request an explanation.
-2. The phrase, its context, explanation and explanation language are saved to TiDB
-   in the background. Check the **Remembered help** status for confirmation.
+2. The phrase, its context, translation, explanation and help language are saved to TiDB
+   in the background. Check the **My glossary** status for confirmation.
 3. Start a new session in the same browser. Your saved concepts load automatically.
-4. Repeat a saved phrase to see **Recognized** help, or use related wording to see
-   a **Possibly related** suggestion.
-5. After stopping the microphone, click **Listen to saved explanation**. This reuses
+4. Repeat a saved phrase to see a highlighted term and its short translation under
+   **Phrase help**, or use related wording to see a **Possibly related** suggestion.
+5. Open **View saved explanation**. After stopping the microphone, click
+   **Listen to saved explanation**. This reuses
    the saved text without a Gemini explanation request. ElevenLabs generates audio
    if that explanation has not already been played during this browser session.
 
+Only memories in the selected help language are displayed and searched. Changing
+language does not automatically translate old entries or change Japanese live captions.
+Older entries without short translations can be upgraded using **Add translation and listen**
+after stopping; this makes one new Gemini request and updates the existing glossary entry.
+Repeated saves update the same normalized phrase/language entry in the normal single-client flow.
+
 Exact matching ignores capitalization and punctuation and runs locally on transcript
-updates. Meaning-based searches use TiDB in the background, at most one ongoing
+updates. Active help follows the current sentence and clears after 12 seconds of
+silence while listening. Historical highlights remain clickable. Meaning-based searches
+use TiDB in the background, at most one ongoing
 search per page and no more frequently than every 2.5 seconds. Unchanged text is
 not searched again. Captions do not wait for search results; no Gemini generation
 requests are added for matching. TiDB search still has network/model latency and
 usage limits. Its provisional similarity threshold needs testing with real lectures.
 
-Full Japanese captions remain enabled. Remembered help is a separate panel; it
-does not yet replace captions with translations of only saved phrases or locate
-paraphrased words for inline highlighting. Saved explanations can be unsuitable
-in a different context, so semantic matches are labeled as suggestions.
+Full Japanese captions remain enabled. Exact terms are highlighted, while semantic
+suggestions do not claim a precise matching location. Saved explanations show their
+original example because they can be unsuitable in a different context. For an exact
+term, **Explain this occurrence** requests a fresh translation/explanation using the
+current lecture context after stopping. **Remove from glossary** retires a saved entry;
+it stops appearing in loads and searches. Neither action runs automatically.
 
 This local demo uses a random ID saved in browser storage, not a login. The same
 browser retains its ID across sessions; another browser or cleared storage uses a
@@ -166,27 +179,32 @@ still work; the page reports the save/search failure separately.
 ### Backend contract (for frontend integration)
 
 - `POST /api/explain`: JSON `{ "phrase": "...", "context": "...", "language": "Japanese" }`;
-  returns `{ "phrase": "...", "language": "Japanese", "explanation": "..." }`.
+  returns `{ "phrase": "...", "language": "Japanese", "translation": "...", "explanation": "..." }`.
   The phrase must occur in the context; phrase limit is 300 characters and context limit is 4000.
 - `POST /api/explanation-audio`: JSON `{ "explanation": "...", "language": "Japanese" }`;
   returns MP3 bytes with `audio/mpeg`. Explanation limit is 1600 characters.
 - Explanation languages: Japanese, French, Arabic, Hindi, English. Live captions are fixed to Japanese.
 - Explanation and explanation-audio requests happen on click. Live translation continuously
   sends microphone audio to Gemini. Both providers' usage limits still apply.
-- `GET /api/memories?user_id=<uuid>` lists that demo user's saved help.
-- `POST /api/memories` accepts `user_id`, `phrase`, `context`, `explanation` and `language`;
-  returns a string `id`. Repeated saves of the same phrase/context/language reuse a row
+- `GET /api/memories?user_id=<uuid>&language=Japanese` lists active entries in that language.
+- `POST /api/memories` accepts `user_id`, `phrase`, `context`, `translation`, `explanation` and `language`;
+  returns a string `id`. Repeated saves of the same normalized phrase/language update a row
   in the normal single-client flow; simultaneous clients can still create duplicates.
-- `POST /api/memories/search` accepts `user_id` and `transcript` (up to 600 characters);
-  returns related memories. It uses TiDB's semantic search, not Gemini.
+- `POST /api/memories/search` accepts `user_id`, `language` and `transcript` (up to 600 characters);
+  filters by language before ranking related memories. It uses TiDB's semantic search, not Gemini.
+- `DELETE /api/memories/<id>?user_id=<uuid>` retires only that demo user's entry.
 - The demo remains local and has no authentication. Configure access controls before public deployment.
 
 Automated local checks used simulated AI responses. A team member has also reported
 that the real selected-phrase explanation flow works. Each teammate should try it
 with their own keys; exact latency, explanation quality and sustained usage limits
 have not been independently benchmarked.
-The new database connection was checked with simulated stores and browser responses;
-real TiDB search accuracy, persistence and latency still need a trial with configured credentials.
+The earlier memory flow passed a real TiDB trial: persistence, browser refresh and
+exact matching worked; two of three paraphrases matched, and three unrelated sentences
+were rejected. Searches took 51–489 ms in that small sample, plus any browser scheduling
+wait. The glossary rework has syntax/structure checks; its new UI, structured AI output,
+entry updates and removal still need an end-to-end trial. The earlier results do not
+verify this new flow.
 
 ### Troubleshooting
 
