@@ -64,6 +64,7 @@
   <p id="dictionary-status" role="status"></p>
   <p id="dictionary-error" role="alert"></p>
 
+  <script src="glossary-order.js"></script>
   <script>
     const startButton = document.querySelector('#start-button');
     const stopButton = document.querySelector('#stop-button');
@@ -117,6 +118,8 @@
     let sourceUpdatedAt = 0;
     let focusedMemoryId = null;
     let lastHelpSignature = '';
+    let glossaryLastSeen = new Map();   // saved phrase id -> where it last appears in the transcript
+    let lastGlossaryOrder = '';
     let lastTranscriptSignature = '';
     let transcriptSpans = [];
     const forgettingIds = new Set();
@@ -188,6 +191,11 @@
       const fragment = document.createDocumentFragment();
       let offset = 0;
       transcriptSpans = glossarySpans(sourceText);
+      // The phrases highlighted here are the ones that count as "heard": keep the glossary list in step.
+      glossaryLastSeen = GlossaryOrder.lastSeenFromSpans(transcriptSpans);
+      if (GlossaryOrder.orderSignature(GlossaryOrder.orderGlossary(selectedLanguageMemories(), glossaryLastSeen)) !== lastGlossaryOrder) {
+        renderGlossary();
+      }
       for (const span of transcriptSpans) {
         fragment.append(document.createTextNode(sourceText.slice(offset, span.start)));
         const mark = document.createElement('mark');
@@ -349,7 +357,13 @@
     function renderGlossary() {
       const expanded = new Set([...glossaryList.querySelectorAll('details[open]')].map(details => details.dataset.memoryId));
       const focusedKey = glossaryList.contains(document.activeElement) ? document.activeElement.dataset.helpKey : null;
-      glossaryList.replaceChildren(...selectedLanguageMemories().map(memory => savedHelpItem(memory, 'Saved phrase')));
+      // Every saved phrase stays in the list; phrases heard in the transcript come first.
+      const ordering = GlossaryOrder.orderGlossary(selectedLanguageMemories(), glossaryLastSeen);
+      lastGlossaryOrder = GlossaryOrder.orderSignature(ordering);
+      glossaryList.replaceChildren(...ordering.items.map(memory => savedHelpItem(
+        memory, ordering.heardIds.has(memory.id) ? 'Heard in this lecture' : 'Saved phrase')));
+      document.querySelector('#glossary-library summary').textContent = ordering.heardIds.size
+        ? `Manage saved phrases (${ordering.heardIds.size} heard in this lecture)` : 'Manage saved phrases';
       for (const details of glossaryList.querySelectorAll('details')) details.open = expanded.has(details.dataset.memoryId);
       if (focusedKey) [...glossaryList.querySelectorAll('[data-help-key]')].find(control => control.dataset.helpKey === focusedKey)?.focus({ preventScroll: true });
     }

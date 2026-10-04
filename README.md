@@ -180,6 +180,17 @@ term, **Explain this occurrence** requests a fresh translation/explanation using
 current lecture context after stopping. **Remove from glossary** retires a saved entry;
 it stops appearing in loads and searches. Neither action runs automatically.
 
+The **Manage saved phrases** list under **My glossary** always shows every saved phrase in
+the selected Help language. Phrases that appear in the live transcript are brought to the
+top as they are heard, the most recently heard first, and labelled **Heard in this lecture**;
+the rest stay below in their saved order. The list title shows how many have been heard
+(for example "Manage saved phrases (2 heard in this lecture)") even while the list is
+closed. "Heard" means exactly the exact-term highlights in the transcript, so the two always
+agree; the meaning-based "possibly related" suggestions stay in **Phrase help** and do not
+reorder the list. The order stays after you stop the microphone and resets when you start a
+new session. A saved explanation you have opened stays open while the list reorders. The
+logic is in `frontend/glossary-order.js`, which has Node tests (`tests/js/`).
+
 This local demo uses a random ID saved in browser storage, not a login. The same
 browser retains its ID across sessions; another browser or cleared storage uses a
 different ID. This is not authenticated access control and must be replaced before

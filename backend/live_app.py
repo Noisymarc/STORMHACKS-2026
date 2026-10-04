@@ -38,6 +38,7 @@ LIVE_TRANSLATION_MODEL = "gemini-3.5-live-translate-preview"
 app = FastAPI(title="Live Translation Demo")
 app.include_router(memory_router)
 PAGE = REPO_ROOT / "frontend" / "live.html"
+GLOSSARY_ORDER_SCRIPT = REPO_ROOT / "frontend" / "glossary-order.js"
 gemini_client = None
 elevenlabs_client = None
 
@@ -183,6 +184,12 @@ async def explanation_audio(request: ExplanationAudioRequest):
 @app.get("/")
 async def home():
     return FileResponse(PAGE)
+
+
+@app.get("/glossary-order.js")
+async def glossary_order_script():
+    """Ordering logic for the glossary list (the page is otherwise the only file served)."""
+    return FileResponse(GLOSSARY_ORDER_SCRIPT, media_type="application/javascript")
 
 
 def _field(event, name: str, default=""):
