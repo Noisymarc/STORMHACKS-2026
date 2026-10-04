@@ -16,6 +16,7 @@ from sqlalchemy import create_engine, text
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from backend import memory_api
 from backend.tidb import MemoryStore, dictionary as d
 
 SCHEMA = """
@@ -201,13 +202,51 @@ def test_duplicates_inside_one_file_collapse(tmp_path):
     assert (result.added, result.skipped_duplicates) == (1, 2)
 
 
-def test_same_phrase_with_different_context_or_language_is_a_different_entry(tmp_path):
+def test_one_entry_per_phrase_and_language_like_the_glossary(tmp_path):
+    """The app keeps a single glossary entry per phrase and language, whatever the context."""
     store = make_store(tmp_path)
     body = ("# STORMHACKS-DICTIONARY v1\n"
-            '{"phrase": "bank", "context": "river bank", "user_id": "u"}\n'
-            '{"phrase": "bank", "context": "money bank", "user_id": "u"}\n'
-            '{"phrase": "bank", "context": "money bank", "target_lang": "fr", "user_id": "u"}\n')
-    assert d.import_dictionary(store, body).added == 3
+            '{"phrase": "Bank", "context": "river bank", "target_lang": "ja", "user_id": "u"}\n'
+            '{"phrase": "bank!", "context": "money bank", "target_lang": "ja", "user_id": "u"}\n'       # same phrase
+            '{"phrase": "ＢＡＮＫ", "context": "full-width", "target_lang": "ja", "user_id": "u"}\n'   # same phrase
+            '{"phrase": "bank", "context": "river bank", "target_lang": "fr", "user_id": "u"}\n')      # other language
+    result = d.import_dictionary(store, body)
+    assert (result.added, result.skipped_duplicates) == (2, 2)
+    assert [(m.content, m.target_lang) for m in store.list_memories("u")] == [("Bank", "ja"), ("bank", "fr")]
+
+
+def test_existing_entries_are_not_overwritten(tmp_path):
+    store = make_store(tmp_path)
+    store.add_memory("u", "latency", context="mine", note="my own explanation", target_lang="ja")
+    body = '# STORMHACKS-DICTIONARY v1\n{"phrase": "latency", "context": "theirs", "explanation": "other", "target_lang": "ja", "user_id": "u"}\n'
+    assert d.import_dictionary(store, body).skipped_duplicates == 1
+    (kept,) = store.list_memories("u")
+    assert (kept.context, kept.note) == ("mine", "my own explanation")
+
+
+def test_dedupe_rule_is_the_same_as_the_apps(tmp_path):
+    """backend/memory_api.py decides what counts as 'the same phrase'; the import must agree."""
+    samples = ["Exponential Growth!", "exponential_growth", "  growth  ", "ＥＸＰＯＮＥＮＴＩＡＬ　ｇｒｏｗｔｈ",
+               "指数関数的成長。", "C++ / C#", "don't", "ﾗﾃﾝﾄ", "", "!!!"]
+    for phrase in samples:
+        assert d.normalize_phrase(phrase) == memory_api.normalized_phrase(phrase), phrase
+
+
+def test_removed_phrases_are_not_exported_and_do_not_block_a_re_import(tmp_path):
+    store = make_store(tmp_path)
+    keep = store.add_memory("u", "latency", target_lang="ja")
+    gone = store.add_memory("u", "bandwidth", target_lang="ja")
+    store.add_memory("only-removed", "throughput", target_lang="ja")
+    store.forget_memory("u", gone)
+    store.forget_memory("only-removed", 3)
+    exported = d.export_dictionary(store)
+    assert [e.phrase for e in d.parse_dictionary(exported).entries] == ["latency"]
+    assert d.all_user_ids(store) == ["u"]                              # the user with nothing active is not listed
+    # the user added "bandwidth" back later (or imports it from another device): it must be allowed in
+    body = '# STORMHACKS-DICTIONARY v1\n{"phrase": "bandwidth", "target_lang": "ja", "user_id": "u"}\n'
+    assert d.import_dictionary(store, body).added == 1
+    assert sorted(m.content for m in store.list_memories("u")) == ["bandwidth", "latency"]
+    assert keep in [m.id for m in store.list_memories("u")]
 
 
 def test_import_for_a_specific_user_re_owns_every_entry(tmp_path, source):

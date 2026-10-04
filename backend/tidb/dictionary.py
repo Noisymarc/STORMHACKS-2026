@@ -18,8 +18,11 @@ a value, survives):
     {"user_id": "...", "phrase": "exponential growth", "context": "...", "explanation": "...", ...}
 
 Lines starting with `#` and blank lines are ignored. Importing is idempotent: an entry whose
-phrase, context and target language already exist for that user is skipped, so importing the
-same file twice (or into the database it came from) adds nothing.
+phrase (compared like the app's glossary does: ignoring case, punctuation and full-/half-width
+forms) and target language already exist for that user is skipped, so importing the same file
+twice (or into the database it came from) adds nothing. Existing entries are never overwritten.
+Phrases the user removed from the glossary ("forgotten") do not count as existing, and are never
+exported.
 """
 from __future__ import annotations
 
@@ -27,6 +30,7 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -113,8 +117,10 @@ def format_dictionary(memories, *, now: datetime | None = None) -> str:
 
 
 def all_user_ids(store: MemoryStore) -> list[str]:
+    """Users who have at least one active (not removed) phrase."""
     with store.engine.connect() as conn:
-        rows = conn.execute(text(f"SELECT DISTINCT user_id FROM {MEMORIES_TABLE} ORDER BY user_id")).all()
+        rows = conn.execute(text(
+            f"SELECT DISTINCT user_id FROM {MEMORIES_TABLE} WHERE status = 'active' ORDER BY user_id")).all()
     return [row.user_id for row in rows]
 
 
@@ -214,8 +220,15 @@ def parse_dictionary(content: str) -> ParseResult:
 
 
 # ---- importing -----------------------------------------------------------------------------
-def _key(phrase: str | None, context: str | None, target_lang: str | None) -> tuple[str, str, str]:
-    return ((phrase or "").strip(), (context or "").strip(), (target_lang or "").strip())
+def normalize_phrase(phrase: str) -> str:
+    """Same rule as backend/memory_api.py's normalized_phrase (tests keep the two in step)."""
+    text_ = unicodedata.normalize("NFKC", phrase).lower()
+    return " ".join(re.sub(r"[^\w]+|_", " ", text_).split())
+
+
+def _key(phrase: str | None, target_lang: str | None) -> tuple[str, str]:
+    """One glossary entry per phrase and language, whatever the surrounding context."""
+    return (normalize_phrase(phrase or ""), (target_lang or "").strip())
 
 
 def import_entries(store: MemoryStore, entries: list[Entry], *, user_id: str | None = None,
@@ -237,11 +250,12 @@ def import_entries(store: MemoryStore, entries: list[Entry], *, user_id: str | N
 
     with store.engine.begin() as conn:
         for owner, items in owners.items():
-            existing = {_key(r.content, r.context, r.target_lang) for r in conn.execute(
-                text(f"SELECT content, context, target_lang FROM {MEMORIES_TABLE} WHERE user_id = :u"),
+            existing = {_key(r.content, r.target_lang) for r in conn.execute(
+                text(f"SELECT content, target_lang FROM {MEMORIES_TABLE} "
+                     "WHERE user_id = :u AND status = 'active'"),
                 {"u": owner})}
             for index, entry in items:
-                key = _key(entry.phrase, entry.context, entry.target_lang)
+                key = _key(entry.phrase, entry.target_lang)
                 if key in existing:
                     result.skipped_duplicates += 1
                     continue
