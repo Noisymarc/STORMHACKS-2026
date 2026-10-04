@@ -1,218 +1,113 @@
 # Design document: live lecture translation and remembered help
 
-Updated: October 3, 2026. This document describes the code currently merged into main.
+Updated: October 3, 2026.
 
-## Purpose
+## What we are building
 
-Help students follow a lecture in another language and understand unfamiliar concepts.
-A student sees live translated captions, selects confusing text after stopping the
-microphone, and hears an explanation in their chosen language. Saved explanations
-can be suggested when related concepts appear in a later session.
+Help students follow lectures in another language and understand unfamiliar concepts.
+The app displays live translated captions, explains confusing phrases on request,
+and remembers those explanations for later lectures.
 
-The long-term goal is personalized support: show help for concepts this particular
-student struggles with, rather than treating every student identically. The current
-implementation remembers concepts the student explicitly selects. It does not infer
-their overall language ability or automatically decide which other words they know.
+Personalization comes from phrases the student chooses. The app does not yet infer
+their language ability or automatically identify everything they find confusing.
 
-## Implementation status
+## What works today
 
 - Live original transcript and Japanese captions: implemented; user reported working.
 - Selected-phrase explanations and ElevenLabs speech: implemented; user reported working.
-- TiDB saving and remembered-help panel: merged through PR #8. Real database persistence,
-  matching quality and latency still need verification with configured TiDB credentials.
-- Full captions continue alongside remembered help. Translating only saved phrases,
-  automatic hover highlighting, and locating paraphrases within the transcript are future work.
-- Continuous spoken translation is a separate proposed feature; it is not part of this flow.
+- TiDB saving and remembered-help suggestions: merged; real database persistence,
+  matching quality and latency still need verification with configured credentials.
 
-### What the MVP does today
+Full Japanese captions remain enabled. Remembered explanations appear in a separate
+panel; they are not translations of only the saved phrases.
 
-**Speak -> original transcript + Japanese captions -> Stop -> select confusing text
--> written explanation + ElevenLabs speech -> save the concept -> suggest saved help
-when it appears again.**
+## The three user flows
 
-There are two independent types of help: full translated captions, and remembered
-concept explanations. A saved explanation is not a direct translation of the current
-sentence. We do not yet suppress all other translations when a saved concept appears.
+### 1. Follow a live lecture
 
-See [the architecture diagram](ARCHITECTURE.md) and [setup instructions](../README.md).
+The student starts the microphone. Browser JavaScript streams audio through the
+Python/FastAPI server to Gemini Live Translate. Original transcript fragments and
+Japanese captions appear as Gemini returns them.
 
-## User flows
+English speech produces an English original transcript. Live-caption language is
+currently fixed to Japanese. The app does not save a recording or full transcript
+to TiDB, and it does not play Gemini's generated audio.
 
-### 1. Follow live speech
+### 2. Understand a confusing phrase
 
-1. Start the microphone and grant permission.
-2. Browser JavaScript captures mono audio and converts it to PCM16 at 16 kHz.
-3. Audio is sent in approximately 100 ms packets through a WebSocket to FastAPI.
-4. FastAPI relays audio to Gemini Live Translate using one ongoing live connection.
-5. Gemini's original and translated transcription fragments are forwarded to the page.
-6. JavaScript appends the fragments immediately. There is no five-second timer on this route.
+After stopping the microphone, the student selects words in the original transcript,
+chooses an explanation language, and clicks **Explain and listen**.
 
-The original transcript follows the speaker's language; English input remains English.
-Live captions are currently fixed to Japanese. Packet size does not guarantee caption
-latency. The model also generates audio internally, which this captions flow discards.
-Microphone sessions do not currently save a recording or a complete transcript to TiDB.
+Gemini explains the phrase using nearby context. ElevenLabs reads that explanation
+aloud. Available explanation languages are Japanese, French, Arabic, Hindi and English;
+this selector does not change the live captions.
 
-### 2. Understand a selected phrase
+The phrase, context, explanation and language are saved to TiDB in the background.
+If saving fails, the explanation remains usable. Repeated requests reuse text and
+audio cached during the current microphone session; if speech fails, text remains.
 
-1. Stop and wait until the page says **Microphone is off**.
-2. Select up to 300 characters in the original transcript.
-3. Choose Japanese, French, Arabic, Hindi or English and click **Explain and listen**.
-4. The browser sends the phrase and nearby context to `POST /api/explain`.
-5. Gemini produces a short explanation in the selected language. For Japanese,
-   English-only output is rejected by a script-presence guard; this is not complete language verification.
-6. Text appears on the page. Saving to TiDB starts independently in the background.
-7. `POST /api/explanation-audio` sends the explanation to ElevenLabs and returns MP3 audio.
-8. The browser plays the speech, with manual controls if automatic playback is blocked.
+### 3. Recognize a remembered concept
 
-Cache results by phrase, context and language in browser memory. Repeated clicks reuse
-text/audio during that session. If audio fails, retain the text and retry only speech.
-A new microphone session clears that cache. Hovering or live transcript updates do not
-generate explanations. Phrase selection remains manual browser text selection.
+Saved concepts load when a session starts. As new transcript text arrives:
 
-### 3. Remember a concept in later speech
+- JavaScript recognizes saved wording locally, ignoring capitalization and punctuation.
+- TiDB searches by meaning in the background to suggest concepts expressed differently.
+- Exact matches appear as **Recognized**; semantic suggestions appear as **Possibly related**.
 
-1. A browser-local UUID identifies the local demo user across page refreshes.
-2. Saved memories load from TiDB at page/session start without delaying microphone capture.
-3. On each transcript update, JavaScript checks the latest 600 characters for saved
-   phrases, ignoring capitalization and punctuation. This recognizes familiar wording locally.
-4. TiDB semantic searches run in the background, at most one ongoing search per page
-   and no more frequently than every 2.5 seconds. Unchanged text is skipped and results
-   from an earlier session are discarded.
-5. Exact matches appear as **Recognized**. Meaning-based results appear as **Possibly related**.
-6. After stopping, the student can listen to a saved explanation without another Gemini
-   explanation request. ElevenLabs still generates speech unless session audio is cached.
+For example, saved **exponential growth** may be suggested when a later speaker says
+**the population is growing exponentially**. This is a possible match, not a guarantee
+that the old explanation fits the new context.
 
-Example: a saved concept, **exponential growth**, may be suggested when the speaker
-says **the population is growing exponentially**. Similarity is a ranking score, not
-confidence or proof that the explanation fits this new context. The current TiDB
-threshold is provisional and needs real lecture examples.
+After stopping, the student can listen to a saved explanation without asking Gemini
+to generate it again. ElevenLabs generates speech unless that audio is already cached.
 
-### How we avoid repeating the earlier rate-limit problem
+## What each technology does
 
-The previous transcription-to-translation approach created a Gemini text-generation
-request for frequent transcript updates. The current caption flow uses a continuous
-Gemini audio session. Recognizing a saved exact phrase happens in JavaScript, and
-semantic matching happens in TiDB; neither adds a Gemini generation request.
-
-Gemini generates a new explanation only when the user requests one that is not in
-the current session cache. Clicking a remembered-help entry uses its stored explanation.
-This reduces repeated generation but does not remove Gemini Live or TiDB usage limits.
-Semantic searches can still be delayed or fail, so they never gate caption display.
-
-## Backend and frontend contract
-
-All browser requests go through the local FastAPI server. API keys and database
-credentials are never sent to the browser.
-
-| Connection or endpoint | Input | Result |
-| --- | --- | --- |
-| WebSocket `/ws/continuous` | Binary PCM16 mono audio at 16 kHz; text `stop` ends the stream. | `source_delta`, `translation_delta`, `status` and `error` events. |
-| POST `/api/explain` | Selected phrase, surrounding context, explanation language. | Phrase, language and explanation text. |
-| POST `/api/explanation-audio` | Explanation text and language. | MP3 audio bytes. |
-| GET `/api/memories` | Browser demo user UUID in `user_id`. | Saved concepts and explanations for that ID. |
-| POST `/api/memories` | User UUID, phrase, context, explanation and language. | Saved memory ID as a string. |
-| POST `/api/memories/search` | User UUID and up to 600 characters of recent transcript. | Up to three related saved memories. |
-| GET `/api/memories/status` | No input. | Whether database settings are present; this is not a live connection test. |
-
-The explanation language selector does not change live-caption language. Live captions
-remain Japanese. The browser caches explanations by phrase, context and language;
-changing language clears the displayed result and requires another Explain click.
-
-## Technology responsibilities
-
-| Technology | Responsibility |
+| Technology | Role |
 | --- | --- |
-| HTML and JavaScript | Microphone controls, text selection, caption display, local matching, background requests and audio playback. |
-| Python/FastAPI | Serve the page; coordinate live audio, explanations, speech and database endpoints. |
-| Uvicorn | Run the local FastAPI server on 127.0.0.1:8000. |
-| WebSockets | Carry continuous microphone audio and caption fragments. |
-| Gemini Live Translate | Process audio directly and return original/Japanese transcription fragments. Model: gemini-3.5-live-translate-preview. |
-| Gemini Flash Lite | Generate on-demand contextual explanations. Model: gemini-3.1-flash-lite. |
-| ElevenLabs | Speak explanation text using eleven_multilingual_v2. It does not transcribe the main continuous flow. |
-| TiDB with Titan Auto Embedding | Persist confusing concepts and compare transcript wording by meaning. |
-| SQLAlchemy/PyMySQL | Connect Python to TiDB using verified TLS and bounded connection/read/write timeouts. |
-| python-dotenv | Load ignored local .env settings; process environment variables take priority. |
+| HTML and JavaScript | Capture microphone audio, display captions, select phrases, match saved wording and play speech. |
+| Python, FastAPI and Uvicorn | Run the local server and coordinate AI and database requests. |
+| WebSockets | Maintain the continuous audio and caption connection. |
+| Gemini Live Translate | Produce the original transcript and Japanese captions directly from microphone audio. |
+| Gemini Flash Lite | Generate contextual explanations when the student requests them. |
+| ElevenLabs | Read explanation text aloud in the selected language. |
+| TiDB with Titan Auto Embedding | Store confusing phrases and explanations, and find related concepts by meaning. |
 
-The older ElevenLabs transcription -> Gemini text-translation route remains available
-at `/ws/live`; it is not used by the current browser demo.
+## How remembered help avoids extra Gemini requests
 
-## Stored data and boundaries
+The earlier approach sent frequent transcript updates to Gemini as separate translation
+requests and hit a rate limit. Captions now use an ongoing Gemini Live audio connection.
+Local phrase matching and TiDB semantic search add no Gemini generation requests.
 
-Each TiDB memory stores the demo user ID, phrase, original context, explanation in
-`note`, source/target language, language metadata, timestamps, active status and an
-embedding generated from the phrase's `content`. Context is stored but not embedded.
-The module uses TiDB Cloud Starter on AWS with its configured Titan embedding model.
-No additional Gemini call is made to match saved concepts.
+Semantic searches examine recent transcript text no more frequently than every
+2.5 seconds, with only one search running per page. Unchanged text is skipped.
+Captions never wait for a search or save to finish.
 
-| Memory field | What it means |
-| --- | --- |
-| `user_id` | Browser demo identity used to filter that user's rows. |
-| `content` | Original confusing phrase; this is the text embedded for semantic matching. |
-| `context` | Nearby original transcript text used when the explanation was created. |
-| `note` | Saved explanation text in the chosen language. |
-| `source_lang`, `target_lang` | Source and explanation language codes. The current English-input demo saves source as `en`. |
-| `metadata` | Includes the explanation language's display name. |
-| `embedding` | TiDB-generated numerical representation of the phrase's meaning. |
-| `status`, timestamps | Active status and creation/update information. |
+Provider usage limits still apply. Semantic help can arrive later than captions,
+and its matching threshold needs tuning with real lecture examples.
 
-Search filters active rows by user ID, ranks them by cosine similarity, and drops
-results below the provisional threshold of 0.15. That value is not 15% confidence.
-The database currently embeds the phrase only, not its context, so ambiguous phrases
-and broad lecture passages can produce unsuitable suggestions.
+## Current limits and next steps
 
-Memory IDs are returned as strings because database BIGINT values may exceed
-JavaScript's safe integer range. Normal repeated saves reuse a matching
-phrase/context/language row; simultaneous clients can still create duplicates.
-Audio is not stored in TiDB. API keys remain on the server and are excluded from Git.
+1. **Verify TiDB with the team's database:** save a phrase, refresh, recognize it in
+   later speech, try paraphrases and unrelated sentences, and measure response time.
+   Existing database integration checks used simulated responses.
+2. **Improve phrase interaction:** selection is currently manual and only available
+   after stopping. Hover highlighting and locating paraphrases in the transcript
+   remain future work.
+3. **Decide on phrase-only translation:** the current app provides full captions plus
+   saved explanations. Showing translations only for remembered phrases needs a
+   separate design and implementation.
+4. **Add authentication before public deployment:** a browser-local random ID currently
+   identifies the demo user. It is not a login or secure ownership check.
 
-The browser UUID is not authentication. Another browser or cleared browser storage
-uses a different ID. Before public deployment, add authenticated users and server-side
-ownership checks. The current demo binds only to the local computer.
+Continuous spoken translation is a separate proposed feature. Current ElevenLabs
+audio is for explanations requested after stopping the microphone.
 
-## Reliability and latency
+## Where to find technical details
 
-- Caption delivery never awaits a memory save or search.
-- Database operations run outside the async event loop; errors appear in a separate panel.
-- Missing TiDB settings leave captions and new explanations available, without persistence.
-- Explanations and speech have timeouts and readable quota/access errors. Unexpected provider
-  errors have matching page/terminal reference IDs; raw responses and transcript text are omitted.
-- Exact matching requires enough transcript words to identify the phrase. Semantic matching
-  adds database/network/embedding delay; instantaneous paraphrase recognition is not guaranteed.
-- Gemini, ElevenLabs and TiDB usage limits still apply. Background matching avoids extra
-  Gemini generation requests but does not make database searches unlimited.
+- [README: setup, API contracts and troubleshooting](../README.md)
+- [TiDB module: database setup and implementation](../backend/tidb/README.md)
+- [Architecture diagram](ARCHITECTURE.md)
 
-## Verification and next acceptance check
-
-Simulated backend and Chromium checks cover saving/listing memories, user filtering,
-cache reuse, exact recognition, semantic suggestions, throttling, invalid input and
-failure isolation. Simulated caption updates continued during a delayed database search.
-The local TiDB connection settings were unavailable, so real persistence, search
-accuracy and latency have not been verified for this integration.
-
-The next real-database acceptance check:
-
-1. Configure TiDB and save a selected phrase; confirm the page reports success.
-2. Refresh/start a later session in the same browser; confirm the phrase is retained.
-3. Repeat its wording, then a paraphrase; observe recognition and any irrelevant suggestions.
-4. Listen to the saved explanation and confirm no new Gemini explanation is requested.
-5. Try unavailable database settings and confirm live captions still function.
-6. Measure caption lag and time to remembered help during a continuous conversation.
-
-## Next milestones
-
-1. Verify the existing TiDB integration with the team's actual database and tune matching
-   using both related and unrelated lecture examples.
-2. Highlight/select meaningful phrases on hover; current selection is manual.
-3. Locate where a related concept appears in the new transcript, rather than only showing
-   a suggested saved concept in the separate panel.
-4. Decide whether to retain full captions or implement a separate saved-phrases-only mode.
-   That mode requires explicit design work; it is not enabled by the current memory search.
-5. Add authenticated user identity before sharing a publicly reachable deployment.
-
-## Repository ownership
-
-- `backend/live_app.py`: live-caption and explanation/speech routes.
-- `backend/memory_api.py`: website endpoints for memory storage and search.
-- `backend/tidb/`: database connection, schema and semantic-search implementation.
-- `frontend/live.html`: plain demo, client matching and playback.
-- `docs/`: design and architecture; root README provides setup and endpoint contracts.
+Main implementation files are `backend/live_app.py`, `backend/memory_api.py`,
+`backend/tidb/` and `frontend/live.html`.
