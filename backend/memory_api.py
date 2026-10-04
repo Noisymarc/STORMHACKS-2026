@@ -24,6 +24,15 @@ LANGUAGES = {"Japanese": "ja", "French": "fr", "Arabic": "ar", "Hindi": "hi", "E
 # backend/concept_judge.py). Without that check, only 0.15+ is shown (17/22, fewer look-alikes).
 CANDIDATE_SIMILARITY = 0.12
 UNCHECKED_SIMILARITY = 0.15
+# Saving a phrase means the student needed help with it then. Each later sentence that
+# uses the concept is one exposure; help is shown on exposures 1, 2, 4, 8, 16, ... so it
+# fades as the student keeps meeting the concept but never stops completely. Asking
+# about the phrase again starts the count over.
+ALWAYS_HELP_EXPOSURES = 2
+
+
+def help_due(exposures: int) -> bool:
+    return exposures <= ALWAYS_HELP_EXPOSURES or exposures & (exposures - 1) == 0
 
 
 def configured():
@@ -80,6 +89,10 @@ class SaveMemory(BaseModel):
     translation: str = Field(default="", max_length=300)
 
 
+class SeenMemory(BaseModel):
+    user_id: UUID
+
+
 class SearchMemory(BaseModel):
     user_id: UUID
     transcript: str = Field(min_length=1, max_length=600)
@@ -90,6 +103,12 @@ def language_code(language):
     if language is not None and language not in LANGUAGES:
         raise HTTPException(422, "Choose a supported glossary language.")
     return LANGUAGES.get(language)
+
+
+def parse_memory_id(memory_id):
+    if not re.fullmatch(r"[0-9]{1,19}", memory_id) or not 0 < int(memory_id) < 2**63:
+        raise HTTPException(422, "Choose a valid glossary entry.")
+    return int(memory_id)
 
 
 def normalized_phrase(phrase):
@@ -130,6 +149,8 @@ async def save_phrase(request: SaveMemory):
                         metadata["translation"] = (memory.metadata or {}).get("translation", "")
                     database.update_memory(str(request.user_id), memory.id, context=context,
                                            note=request.explanation.strip(), metadata=metadata)
+                # Asking again means the student still needs help: show it fully again.
+                database.reset_exposures(str(request.user_id), memory.id)
                 return str(memory.id)
         return str(database.add_memory(
             str(request.user_id), phrase, context=context, note=request.explanation.strip(),
@@ -170,12 +191,25 @@ async def search_saved(request: SearchMemory):
     return {"memories": results}
 
 
+@router.post("/{memory_id}/seen")
+async def seen_in_sentence(memory_id: str, request: SeenMemory):
+    """The page met this saved concept in a new sentence (exact phrase or confirmed paraphrase).
+
+    Returns the updated encounter count and whether to show full help this time.
+    """
+    entry_id = parse_memory_id(memory_id)
+    database = await get_store()
+    exposures = await run_database(lambda: database.record_exposure(str(request.user_id), entry_id))
+    if exposures is None:
+        raise HTTPException(404, "This glossary entry was not found for this browser.")
+    return {"exposures": exposures, "show_help": help_due(exposures)}
+
+
 @router.delete("/{memory_id}")
 async def forget_saved(memory_id: str, user_id: UUID):
-    if not re.fullmatch(r"[0-9]{1,19}", memory_id) or not 0 < int(memory_id) < 2**63:
-        raise HTTPException(422, "Choose a valid glossary entry.")
+    entry_id = parse_memory_id(memory_id)
     database = await get_store()
-    removed = await run_database(lambda: database.forget_memory(str(user_id), int(memory_id)))
+    removed = await run_database(lambda: database.forget_memory(str(user_id), entry_id))
     if not removed:
         raise HTTPException(404, "This glossary entry was not found for this browser.")
     return {"forgotten": True}

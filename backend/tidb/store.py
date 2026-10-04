@@ -14,7 +14,7 @@ from typing import Any
 from sqlalchemy import Engine, text
 
 from .client import engine_from_env
-from .schema import MEMORIES_TABLE, init_schema
+from .schema import EXPOSURES_TABLE, MEMORIES_TABLE, init_schema
 
 # Titan v2 cosine similarity between a short memory ("exponential growth") and a
 # full transcript sentence is low in absolute terms: ~0.26 for the related
@@ -162,6 +162,42 @@ class MemoryStore:
                          {"id": memory_id, "user_id": user_id, "context": context,
                           "note": note, "metadata": json.dumps(metadata)})
 
+    def record_exposure(self, user_id: str, memory_id: int) -> int | None:
+        """Count one more encounter with this concept; returns the new count, or None if not found.
+
+        Counts live in their own table so the memories row (and its generated
+        embedding column) is never rewritten just because a concept was heard.
+        """
+        _require_user_id(user_id)
+        with self.engine.begin() as conn:
+            exists = conn.execute(
+                text(f"SELECT 1 FROM {MEMORIES_TABLE} "
+                     "WHERE id = :id AND user_id = :user_id AND status = 'active'"),
+                {"id": memory_id, "user_id": user_id},
+            ).first()
+            if exists is None:
+                return None
+            conn.execute(
+                text(f"INSERT INTO {EXPOSURES_TABLE} (user_id, memory_id, exposures) "
+                     "VALUES (:user_id, :id, 1) "
+                     "ON DUPLICATE KEY UPDATE exposures = exposures + 1"),
+                {"id": memory_id, "user_id": user_id},
+            )
+            return int(conn.execute(
+                text(f"SELECT exposures FROM {EXPOSURES_TABLE} "
+                     "WHERE user_id = :user_id AND memory_id = :id"),
+                {"id": memory_id, "user_id": user_id},
+            ).scalar_one())
+
+    def reset_exposures(self, user_id: str, memory_id: int) -> None:
+        """The user asked about this concept again: start counting encounters from zero."""
+        _require_user_id(user_id)
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(f"DELETE FROM {EXPOSURES_TABLE} WHERE user_id = :user_id AND memory_id = :id"),
+                {"id": memory_id, "user_id": user_id},
+            )
+
     def forget_memory(self, user_id: str, memory_id: int) -> bool:
         """Retire only this user's entry; preserve its row for the database owner."""
         _require_user_id(user_id)
@@ -174,6 +210,10 @@ class MemoryStore:
     def delete_user_memories(self, user_id: str) -> int:
         _require_user_id(user_id)
         with self.engine.begin() as conn:
+            conn.execute(
+                text(f"DELETE FROM {EXPOSURES_TABLE} WHERE user_id = :user_id"),
+                {"user_id": user_id},
+            )
             result = conn.execute(
                 text(f"DELETE FROM {MEMORIES_TABLE} WHERE user_id = :user_id"),
                 {"user_id": user_id},

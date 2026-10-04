@@ -109,6 +109,9 @@
     let transcriptSpans = [];
     // Gemini-confirmed paraphrases of saved phrases, as offsets into sourceText.
     let paraphraseSpans = [];
+    // Help fades as a saved concept keeps coming back (server counts encounters).
+    // Key `${memoryId}:${sentenceStart}` -> { pending } or { showHelp, exposures }.
+    const exposureDecisions = new Map();
     const forgettingIds = new Set();
     const matchedMemories = new Map();
     try {
@@ -131,6 +134,11 @@
 
     function currentSentence() {
       return sourceText.slice(currentSentenceStart()).trim().slice(-600);
+    }
+
+    function sentenceStarts() {
+      return [0, ...[...sourceText.trimEnd().matchAll(/(?:[.!?]\s+|[。！？]\s*|\n+)(?=\S)/gu)]
+        .map(match => match.index + match[0].length)];
     }
 
     function currentSentenceStart() {
@@ -188,6 +196,30 @@
       }
     }
 
+    async function recordExposure(memory, key) {
+      exposureDecisions.set(key, { pending: true });
+      const session = memorySession;
+      try {
+        const response = await postJson(`/api/memories/${encodeURIComponent(memory.id)}/seen`, { user_id: demoUserId });
+        const result = await response.json();
+        if (session !== memorySession) return;
+        exposureDecisions.set(key, { showHelp: Boolean(result.show_help), exposures: result.exposures });
+      } catch (error) {
+        // Counting failed: err on the side of helping.
+        if (session === memorySession) exposureDecisions.set(key, { showHelp: true, exposures: null });
+      }
+      matchKnownPhrases();
+    }
+
+    function helpDecision(memory, exact) {
+      // Only matches we are sure about (exact phrase, Gemini-confirmed paraphrase) fade.
+      if (exact !== true && !(exact === false && memory.confirmed)) return { showHelp: true, exposures: null };
+      const decision = exposureDecisions.get(`${memory.id}:${currentSentenceStart()}`);
+      if (decision) return decision;
+      // Encounters are only counted while listening; otherwise show help as before.
+      return socket && demoUserId ? { pending: true } : { showHelp: true, exposures: null };
+    }
+
     function showSavedHelp(memory) {
       focusedMemoryId = memory.id;
       renderRememberedHelp();
@@ -196,16 +228,23 @@
     function renderTranscript() {
       const signature = JSON.stringify([sourceText, explanationLanguage.value,
         selectedLanguageMemories().map(memory => [memory.id, memory.phrase, memory.translation]),
-        paraphraseSpans.map(span => [span.start, span.end, span.memory.id])]);
+        paraphraseSpans.map(span => [span.start, span.end, span.memory.id]), [...exposureDecisions]]);
       if (signature === lastTranscriptSignature) return;
       lastTranscriptSignature = signature;
       const focusedKey = document.activeElement?.dataset.glossaryKey;
       const fragment = document.createDocumentFragment();
       let offset = 0;
       transcriptSpans = withParaphrases(glossarySpans(sourceText));
+      const starts = sentenceStarts();
       for (const span of transcriptSpans) {
         fragment.append(document.createTextNode(sourceText.slice(offset, span.start)));
         const mark = document.createElement('mark');
+        const sentenceStart = starts.filter(start => start <= span.start).at(-1) ?? 0;
+        if (exposureDecisions.get(`${span.memory.id}:${sentenceStart}`)?.showHelp === false) {
+          // Familiar by now: a light underline instead of a highlight, still clickable.
+          mark.style.background = 'transparent';
+          mark.style.textDecoration = 'underline dotted';
+        }
         const button = document.createElement('button');
         button.type = 'button';
         button.textContent = sourceText.slice(span.start, span.end);
@@ -375,20 +414,25 @@
 
     function renderRememberedHelp() {
       const languageMemories = selectedLanguageMemories();
-      const matches = [...matchedMemories.values()];
+      const found = [...matchedMemories.values()].map(match => ({ ...match, decision: helpDecision(match.memory, match.exact) }));
+      const matches = found.filter(match => match.decision.showHelp);
+      const quiet = found.filter(match => match.decision.showHelp === false).length;
       const focused = languageMemories.find(memory => memory.id === focusedMemoryId);
-      if (focused && !matchedMemories.has(focused.id)) matches.push({ memory: focused, exact: null });
-      const signature = JSON.stringify([matches, startButton.disabled, explaining, [...forgettingIds], explanationLanguage.value]);
+      if (focused && !matches.some(match => match.memory.id === focused.id)) matches.push({ memory: focused, exact: null, decision: {} });
+      const signature = JSON.stringify([matches, quiet, startButton.disabled, explaining, [...forgettingIds], explanationLanguage.value]);
       if (signature === lastHelpSignature) return;
       lastHelpSignature = signature;
       const expanded = new Set([...memoryMatches.querySelectorAll('details[open]')].map(details => details.dataset.memoryId));
       const focusedKey = document.activeElement?.dataset.helpKey;
-      memoryMatches.replaceChildren(...matches.map(({ memory, exact }) => savedHelpItem(memory,
-        exact === null ? 'Selected saved phrase' : exact ? 'Recognized in this sentence'
-          : memory.confirmed ? `Same idea as "${memory.expression || memory.phrase}" in this sentence` : 'Possibly related to this sentence')));
+      memoryMatches.replaceChildren(...matches.map(({ memory, exact, decision }) => savedHelpItem(memory,
+        (exact === null ? 'Selected saved phrase' : exact ? 'Recognized in this sentence'
+          : memory.confirmed ? `Same idea as "${memory.expression || memory.phrase}" in this sentence` : 'Possibly related to this sentence')
+        + (decision.exposures ? ` (heard ${decision.exposures} time${decision.exposures === 1 ? '' : 's'} since saved)` : ''))));
       for (const details of memoryMatches.querySelectorAll('details')) details.open = expanded.has(details.dataset.memoryId);
       if (focusedKey) [...memoryMatches.querySelectorAll('[data-help-key]')].find(control => control.dataset.helpKey === focusedKey)?.focus({ preventScroll: true });
-      activeHelpStatus.textContent = matches.length ? `Saved help in ${explanationLanguage.value}. Explanations use the saved example, so check that they fit this lecture.` : 'No remembered phrases in the current sentence.';
+      activeHelpStatus.textContent = matches.length ? `Saved help in ${explanationLanguage.value}. Explanations use the saved example, so check that they fit this lecture.`
+        : quiet ? 'Familiar saved phrases are underlined; help returns from time to time. Click one to see it now.'
+        : 'No remembered phrases in the current sentence.';
     }
 
     async function loadSavedMemories() {
@@ -425,6 +469,13 @@
         if (semanticSentenceStart === currentSentenceStart()) {
           for (const memory of semanticMemories) {
             if (memory.language === explanationLanguage.value && !matchedMemories.has(memory.id)) matchedMemories.set(memory.id, { memory, exact: false });
+          }
+        }
+        if (socket && demoUserId) {
+          const sentenceStart = currentSentenceStart();
+          for (const { memory, exact } of matchedMemories.values()) {
+            const key = `${memory.id}:${sentenceStart}`;
+            if ((exact || memory.confirmed) && !exposureDecisions.has(key)) recordExposure(memory, key);
           }
         }
       }
@@ -672,6 +723,7 @@
       semanticMemories = [];
       semanticSentenceStart = -1;
       paraphraseSpans = [];
+      exposureDecisions.clear();
       focusedMemoryId = null;
       lastSearchText = '';
       lastSearchAt = -Infinity;
@@ -793,6 +845,7 @@
       semanticMemories = [];
       semanticSentenceStart = -1;
       paraphraseSpans = [];
+      exposureDecisions.clear();
       focusedMemoryId = null;
       lastSearchText = '';
       lastSearchAt = -Infinity;

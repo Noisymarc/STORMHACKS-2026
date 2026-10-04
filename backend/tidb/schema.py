@@ -11,6 +11,7 @@ EMBEDDING_MODEL = "tidbcloud_free/amazon/titan-embed-text-v2"
 EMBEDDING_DIMENSIONS = 1024
 
 MEMORIES_TABLE = "memories"
+EXPOSURES_TABLE = "memory_exposures"
 
 CREATE_MEMORIES = f"""
 CREATE TABLE IF NOT EXISTS {MEMORIES_TABLE} (
@@ -34,12 +35,26 @@ CREATE TABLE IF NOT EXISTS {MEMORIES_TABLE} (
 )
 """
 
+# How many times each user has met each saved concept since they last asked about it.
+CREATE_EXPOSURES = f"""
+CREATE TABLE IF NOT EXISTS {EXPOSURES_TABLE} (
+    user_id      VARCHAR(64) NOT NULL,
+    memory_id    BIGINT      NOT NULL,
+    exposures    INT         NOT NULL DEFAULT 0,
+    last_seen_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                             ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (user_id, memory_id)
+)
+"""
+
 
 def init_schema(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(text(CREATE_MEMORIES))
+        conn.execute(text(CREATE_EXPOSURES))
 
 
 def drop_schema(engine: Engine) -> None:
     with engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS {EXPOSURES_TABLE}"))
         conn.execute(text(f"DROP TABLE IF EXISTS {MEMORIES_TABLE}"))

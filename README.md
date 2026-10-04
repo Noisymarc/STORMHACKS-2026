@@ -188,6 +188,17 @@ To protect the Gemini quota shared with captions and explanations, checks are ca
 `CONCEPT_JUDGE=off` disables them. Whenever a check is off, over a cap or fails, the page
 falls back to unchecked **Possibly related** suggestions above a stricter similarity.
 
+### Help fades as a concept keeps coming back
+
+Saving a phrase marks that the student needed help with it at that time; the app never
+asks the student to say they understood. While listening, each new sentence that uses a
+saved concept (the exact phrase or a Gemini-confirmed paraphrase) counts as one encounter,
+stored in TiDB's `memory_exposures` table. Full help appears on encounters 1, 2, 4, 8, 16, ...;
+in between, the phrase is only underlined and its help opens on click. Help therefore becomes
+rarer as the student keeps meeting the concept but never stops completely. Explaining the
+phrase again starts the count over, and **Remove from glossary** stops it. Unchecked
+**Possibly related** suggestions are not counted.
+
 `scripts/eval_search.py` (TiDB) and `scripts/eval_need.py` (Gemini, same prompt as the app)
 measure this. On their sample sentences, single-sentence search at similarity 0.12 found
 20 of 22 related memories and the Gemini check judged 25 of 25 candidates correctly.

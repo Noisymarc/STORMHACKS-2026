@@ -98,3 +98,16 @@ def test_add_and_list_round_trip(store, users):
 
     [m] = store.list_memories(alice)
     assert (m.content, m.note, m.metadata) == ("compound interest", "interest on interest", {"level": 2})
+
+
+@needs_tidb
+def test_exposures_count_up_and_reset(store, users):
+    alice, bob = users
+    memory_id = store.add_memory(alice, "exponential growth")
+
+    assert [store.record_exposure(alice, memory_id) for _ in range(3)] == [1, 2, 3]
+    assert store.record_exposure(bob, memory_id) is None  # another user's entry
+    store.reset_exposures(alice, memory_id)
+    assert store.record_exposure(alice, memory_id) == 1
+    store.forget_memory(alice, memory_id)
+    assert store.record_exposure(alice, memory_id) is None

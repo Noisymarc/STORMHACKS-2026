@@ -166,3 +166,50 @@ def test_search_keeps_confirmed_and_drops_rejected(monkeypatch):
 def test_search_without_check_shows_only_closer_matches_as_unconfirmed(monkeypatch):
     found = search(monkeypatch, [memory(1, "exponential growth", 0.13), memory(2, "latency", 0.30)], None)
     assert [(m["phrase"], m["confirmed"]) for m in found] == [("latency", None)]
+
+
+def test_help_fades_but_never_stops():
+    shown = [n for n in range(1, 40) if memory_api.help_due(n)]
+    assert shown == [1, 2, 4, 8, 16, 32]
+
+
+class ExposureStore:
+    def __init__(self):
+        self.counts = {}
+        self.resets = []
+
+    def record_exposure(self, user_id, memory_id):
+        if memory_id == 404:
+            return None
+        self.counts[memory_id] = self.counts.get(memory_id, 0) + 1
+        return self.counts[memory_id]
+
+    def reset_exposures(self, user_id, memory_id):
+        self.resets.append(memory_id)
+        self.counts.pop(memory_id, None)
+
+    def list_memories(self, user_id):
+        return [memory(7, "exponential growth", None)]
+
+    def update_memory(self, *args, **kwargs):
+        pass
+
+
+def test_seen_counts_encounters_and_decides_help(monkeypatch):
+    monkeypatch.setattr(memory_api, "store", ExposureStore())
+    request = memory_api.SeenMemory(user_id=uuid.uuid4())
+    replies = [asyncio.run(memory_api.seen_in_sentence("7", request)) for _ in range(4)]
+    assert [(r["exposures"], r["show_help"]) for r in replies] == [(1, True), (2, True), (3, False), (4, True)]
+    with pytest.raises(memory_api.HTTPException) as missing:
+        asyncio.run(memory_api.seen_in_sentence("404", request))
+    assert missing.value.status_code == 404
+
+
+def test_asking_again_resets_the_count(monkeypatch):
+    fake = ExposureStore()
+    fake.counts[7] = 9
+    monkeypatch.setattr(memory_api, "store", fake)
+    request = memory_api.SaveMemory(user_id=uuid.uuid4(), phrase="exponential growth",
+                                    context="exponential growth", explanation="説明", language="Japanese")
+    assert asyncio.run(memory_api.save_phrase(request)) == {"id": "7"}
+    assert fake.resets == [7] and 7 not in fake.counts
