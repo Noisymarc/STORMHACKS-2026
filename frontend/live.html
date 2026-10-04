@@ -98,7 +98,7 @@
     let memorySession = 0;
     let searchBusy = false;
     let lastSearchText = '';
-    let lastSearchAt = 0;
+    let lastSearchAt = -Infinity;
     let memoryLoadVersion = 0;
     let semanticMemories = [];
     let semanticSentenceStart = -1;
@@ -404,7 +404,12 @@
       if (!memoriesEnabled || searchBusy || !socket || !sourceText.trim()) return;
       const transcript = currentSentence();
       if (!transcript || performance.now() - sourceUpdatedAt > 12000) return;
-      if (transcript === lastSearchText || performance.now() - lastSearchAt < 2500) return;
+      // Wait briefly for caption packets to settle, but still search during speech.
+      // One request at a time, at most once per 750 ms; no extra Gemini calls.
+      const now = performance.now();
+      if (normalized(transcript).split(' ').length < 4) return;
+      if (now - sourceUpdatedAt < 150 && now - lastSearchAt < 1000) return;
+      if (transcript === lastSearchText || now - lastSearchAt < 750) return;
       const session = memorySession;
       const language = explanationLanguage.value;
       const sentenceStart = currentSentenceStart();
@@ -773,7 +778,8 @@
       loadSavedMemories();
     });
     loadSavedMemories();
-    setInterval(() => { matchKnownPhrases(); searchRelatedMemories(); }, 500);
+    setInterval(matchKnownPhrases, 500);
+    setInterval(searchRelatedMemories, 100);
   </script>
 </body>
 </html>

@@ -66,7 +66,8 @@ def test_semantic_search_finds_related_memory(store, users):
 @needs_tidb
 def test_default_threshold_drops_unrelated_memories(store, users):
     alice, _ = users
-    store.add_memory(alice, "exponential growth")
+    store.add_memory(alice, "exponential growth",
+                     context="The population grows by the same percentage each period.")
     store.add_memory(alice, "photosynthesis")
     store.add_memory(alice, "latency")
 
