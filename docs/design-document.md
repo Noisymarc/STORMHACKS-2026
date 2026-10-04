@@ -1,5 +1,7 @@
 # Design document: live lecture translation and remembered help
 
+Updated: October 3, 2026. This document describes the code currently merged into main.
+
 ## Purpose
 
 Help students follow a lecture in another language and understand unfamiliar concepts.
@@ -7,14 +9,30 @@ A student sees live translated captions, selects confusing text after stopping t
 microphone, and hears an explanation in their chosen language. Saved explanations
 can be suggested when related concepts appear in a later session.
 
+The long-term goal is personalized support: show help for concepts this particular
+student struggles with, rather than treating every student identically. The current
+implementation remembers concepts the student explicitly selects. It does not infer
+their overall language ability or automatically decide which other words they know.
+
 ## Implementation status
 
 - Live original transcript and Japanese captions: implemented; user reported working.
 - Selected-phrase explanations and ElevenLabs speech: implemented; user reported working.
-- TiDB saving and remembered-help panel: implemented on PR #8, pending review and a real database trial.
+- TiDB saving and remembered-help panel: merged through PR #8. Real database persistence,
+  matching quality and latency still need verification with configured TiDB credentials.
 - Full captions continue alongside remembered help. Translating only saved phrases,
   automatic hover highlighting, and locating paraphrases within the transcript are future work.
 - Continuous spoken translation is a separate proposed feature; it is not part of this flow.
+
+### What the MVP does today
+
+**Speak -> original transcript + Japanese captions -> Stop -> select confusing text
+-> written explanation + ElevenLabs speech -> save the concept -> suggest saved help
+when it appears again.**
+
+There are two independent types of help: full translated captions, and remembered
+concept explanations. A saved explanation is not a direct translation of the current
+sentence. We do not yet suppress all other translations when a saved concept appears.
 
 See [the architecture diagram](ARCHITECTURE.md) and [setup instructions](../README.md).
 
@@ -69,6 +87,37 @@ says **the population is growing exponentially**. Similarity is a ranking score,
 confidence or proof that the explanation fits this new context. The current TiDB
 threshold is provisional and needs real lecture examples.
 
+### How we avoid repeating the earlier rate-limit problem
+
+The previous transcription-to-translation approach created a Gemini text-generation
+request for frequent transcript updates. The current caption flow uses a continuous
+Gemini audio session. Recognizing a saved exact phrase happens in JavaScript, and
+semantic matching happens in TiDB; neither adds a Gemini generation request.
+
+Gemini generates a new explanation only when the user requests one that is not in
+the current session cache. Clicking a remembered-help entry uses its stored explanation.
+This reduces repeated generation but does not remove Gemini Live or TiDB usage limits.
+Semantic searches can still be delayed or fail, so they never gate caption display.
+
+## Backend and frontend contract
+
+All browser requests go through the local FastAPI server. API keys and database
+credentials are never sent to the browser.
+
+| Connection or endpoint | Input | Result |
+| --- | --- | --- |
+| WebSocket `/ws/continuous` | Binary PCM16 mono audio at 16 kHz; text `stop` ends the stream. | `source_delta`, `translation_delta`, `status` and `error` events. |
+| POST `/api/explain` | Selected phrase, surrounding context, explanation language. | Phrase, language and explanation text. |
+| POST `/api/explanation-audio` | Explanation text and language. | MP3 audio bytes. |
+| GET `/api/memories` | Browser demo user UUID in `user_id`. | Saved concepts and explanations for that ID. |
+| POST `/api/memories` | User UUID, phrase, context, explanation and language. | Saved memory ID as a string. |
+| POST `/api/memories/search` | User UUID and up to 600 characters of recent transcript. | Up to three related saved memories. |
+| GET `/api/memories/status` | No input. | Whether database settings are present; this is not a live connection test. |
+
+The explanation language selector does not change live-caption language. Live captions
+remain Japanese. The browser caches explanations by phrase, context and language;
+changing language clears the displayed result and requires another Explain click.
+
 ## Technology responsibilities
 
 | Technology | Responsibility |
@@ -94,6 +143,22 @@ Each TiDB memory stores the demo user ID, phrase, original context, explanation 
 embedding generated from the phrase's `content`. Context is stored but not embedded.
 The module uses TiDB Cloud Starter on AWS with its configured Titan embedding model.
 No additional Gemini call is made to match saved concepts.
+
+| Memory field | What it means |
+| --- | --- |
+| `user_id` | Browser demo identity used to filter that user's rows. |
+| `content` | Original confusing phrase; this is the text embedded for semantic matching. |
+| `context` | Nearby original transcript text used when the explanation was created. |
+| `note` | Saved explanation text in the chosen language. |
+| `source_lang`, `target_lang` | Source and explanation language codes. The current English-input demo saves source as `en`. |
+| `metadata` | Includes the explanation language's display name. |
+| `embedding` | TiDB-generated numerical representation of the phrase's meaning. |
+| `status`, timestamps | Active status and creation/update information. |
+
+Search filters active rows by user ID, ranks them by cosine similarity, and drops
+results below the provisional threshold of 0.15. That value is not 15% confidence.
+The database currently embeds the phrase only, not its context, so ambiguous phrases
+and broad lecture passages can produce unsuitable suggestions.
 
 Memory IDs are returned as strings because database BIGINT values may exceed
 JavaScript's safe integer range. Normal repeated saves reuse a matching
@@ -124,7 +189,7 @@ failure isolation. Simulated caption updates continued during a delayed database
 The local TiDB connection settings were unavailable, so real persistence, search
 accuracy and latency have not been verified for this integration.
 
-Before merging PR #8:
+The next real-database acceptance check:
 
 1. Configure TiDB and save a selected phrase; confirm the page reports success.
 2. Refresh/start a later session in the same browser; confirm the phrase is retained.
@@ -132,6 +197,17 @@ Before merging PR #8:
 4. Listen to the saved explanation and confirm no new Gemini explanation is requested.
 5. Try unavailable database settings and confirm live captions still function.
 6. Measure caption lag and time to remembered help during a continuous conversation.
+
+## Next milestones
+
+1. Verify the existing TiDB integration with the team's actual database and tune matching
+   using both related and unrelated lecture examples.
+2. Highlight/select meaningful phrases on hover; current selection is manual.
+3. Locate where a related concept appears in the new transcript, rather than only showing
+   a suggested saved concept in the separate panel.
+4. Decide whether to retain full captions or implement a separate saved-phrases-only mode.
+   That mode requires explicit design work; it is not enabled by the current memory search.
+5. Add authenticated user identity before sharing a publicly reachable deployment.
 
 ## Repository ownership
 
