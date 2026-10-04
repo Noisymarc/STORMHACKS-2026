@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 import traceback
 import uuid
@@ -229,6 +230,14 @@ async def explanation_audio(request: ExplanationAudioRequest):
 @app.get("/")
 async def home():
     return FileResponse(PAGE)
+
+
+@app.get("/health")
+async def health():
+    """Let the host check readiness without spending provider credits."""
+    if gemini_client is None:
+        raise HTTPException(503, "Translation is not configured.")
+    return {"status": "ok"}
 
 
 def _field(event, name: str, default=""):
@@ -470,18 +479,28 @@ async def live_translation(websocket: WebSocket):
 
 
 def main():
-    """Load local settings, fall back to hidden prompts, and run the server."""
+    """Run locally with prompts, or on a host with environment settings."""
     global gemini_client, elevenlabs_client
     load_dotenv(REPO_ROOT / ".env", override=False)
-    gemini_key = (
-        (os.getenv("GEMINI_API_KEY") or "").strip()
-        or getpass.getpass("Gemini API key (hidden): ").strip()
-    )
-    elevenlabs_key = (os.getenv("ELEVENLABS_API_KEY") or "").strip() or getpass.getpass(
-        "ElevenLabs API key (hidden, blank for captions only): "
-    ).strip()
+    hosted = os.getenv("APP_ENV") == "production" or os.getenv("RENDER") == "true"
+    interactive = not hosted and sys.stdin.isatty()
+    gemini_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    elevenlabs_key = (os.getenv("ELEVENLABS_API_KEY") or "").strip()
+    if interactive:
+        if not gemini_key:
+            gemini_key = getpass.getpass("Gemini API key (hidden): ").strip()
+        if not elevenlabs_key:
+            elevenlabs_key = getpass.getpass(
+                "ElevenLabs API key (hidden, blank for captions only): "
+            ).strip()
     if not gemini_key:
-        raise SystemExit("A Gemini API key is required to start the live demo.")
+        raise SystemExit("Set GEMINI_API_KEY before starting the server.")
+    try:
+        port = int(os.getenv("PORT", "8000"))
+        if not 1 <= port <= 65535:
+            raise ValueError
+    except ValueError:
+        raise SystemExit("PORT must be a number between 1 and 65535.") from None
     gemini_client = genai.Client(api_key=gemini_key)
     elevenlabs_client = (
         AsyncElevenLabs(api_key=elevenlabs_key) if elevenlabs_key else None
@@ -489,7 +508,7 @@ def main():
 
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0" if hosted else "127.0.0.1", port=port)
 
 
 if __name__ == "__main__":
