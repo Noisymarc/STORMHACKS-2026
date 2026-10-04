@@ -6,7 +6,7 @@ from elevenlabs.client import ElevenLabs
 
 def translate(client, text, target_language):
     response = client.interactions.create(
-        model="gemini-3.5-flash-lite",  # model that works right now
+        model="gemini-3.1-flash-lite",  # model that works right now
         system_instruction=(
             f"Translate the user's text into {target_language}. "
             "Preserve meaning, names, and numbers. "
