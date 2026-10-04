@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Translation Demo</title>
+</head>
+<body>
+  <h1>Live Translation Demo</h1>
+  <p>Gemini listens directly to your microphone and streams Japanese captions. This demo displays captions only; generated audio is not played.</p>
+
+  <button id="start-button" type="button">Start microphone</button>
+  <button id="stop-button" type="button" disabled>Stop</button>
+  <p id="status" role="status">Microphone is off.</p>
+  <p id="error" role="alert"></p>
+
+  <h2>Transcript</h2>
+  <p id="source-caption" aria-live="polite">—</p>
+
+  <h2>Japanese translation</h2>
+  <p id="translated-caption" aria-live="polite">—</p>
+
+  <h2>Explain a phrase</h2>
+  <p>After stopping the microphone, select words in the original transcript, then click Explain.</p>
+  <p>Selected phrase: <span id="selected-phrase">None</span></p>
+  <label for="explanation-language">Explanation language</label>
+  <select id="explanation-language">
+    <option>Japanese</option>
+    <option>French</option>
+    <option>Arabic</option>
+    <option>Hindi</option>
+    <option>English</option>
+  </select>
+  <button id="explain-button" type="button" disabled>Explain and listen</button>
+  <p id="explanation-status" role="status"></p>
+  <p id="explanation-error" role="alert"></p>
+  <p id="explanation-text" aria-live="polite"></p>
+  <audio id="explanation-audio" controls hidden></audio>
+
+  <script>
+    const startButton = document.querySelector('#start-button');
+    const stopButton = document.querySelector('#stop-button');
+    const statusText = document.querySelector('#status');
+    const errorText = document.querySelector('#error');
+    const sourceCaption = document.querySelector('#source-caption');
+    const translatedCaption = document.querySelector('#translated-caption');
+    const selectedPhraseText = document.querySelector('#selected-phrase');
+    const explanationLanguage = document.querySelector('#explanation-language');
+    const explainButton = document.querySelector('#explain-button');
+    const explanationStatus = document.querySelector('#explanation-status');
+    const explanationError = document.querySelector('#explanation-error');
+    const explanationText = document.querySelector('#explanation-text');
+    const explanationAudio = document.querySelector('#explanation-audio');
+
+    let socket = null;
+    let stream = null;
+    let audioContext = null;
+    let microphone = null;
+    let audioProcessor = null;
+    let stopping = false;
+    let sourceText = '';
+    let translationText = '';
+    let pendingAudio = new Uint8Array(0);
+    let ready = false;
+    let selectedPhrase = '';
+    let selectedContext = '';
+    let explaining = false;
+    const explanationCache = new Map();
+
+    function updateExplainButton() {
+      explainButton.disabled = explaining || startButton.disabled || !selectedPhrase;
+    }
+
+    function captureSelection() {
+      if (startButton.disabled || explaining) return;
+      const selection = window.getSelection();
+      if (!selection || !selection.rangeCount) return;
+      const range = selection.getRangeAt(0);
+      if (!sourceCaption.contains(range.startContainer) || !sourceCaption.contains(range.endContainer)) return;
+      const phrase = selection.toString().trim();
+      if (!phrase) return;
+      if (phrase.length > 300) {
+        explanationError.textContent = 'Select a shorter phrase (up to 300 characters).';
+        selectedPhrase = '';
+        selectedPhraseText.textContent = 'None';
+        updateExplainButton();
+        return;
+      }
+      const prefix = range.cloneRange();
+      prefix.selectNodeContents(sourceCaption);
+      prefix.setEnd(range.startContainer, range.startOffset);
+      const offset = prefix.toString().length;
+      selectedPhrase = phrase;
+      selectedContext = sourceCaption.textContent.slice(
+        Math.max(0, offset - 300), Math.min(sourceCaption.textContent.length, offset + range.toString().length + 300)
+      );
+      selectedPhraseText.textContent = phrase;
+      explanationError.textContent = '';
+      updateExplainButton();
+    }
+
+    async function postJson(url, payload) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60000);
+      try {
+        const response = await fetch(url, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload), signal: controller.signal,
+        });
+        if (!response.ok) {
+          const problem = await response.json().catch(() => ({}));
+          throw new Error(typeof problem.detail === 'string' ? problem.detail : `Request failed (HTTP ${response.status}). Try again.`);
+        }
+        return response;
+      } catch (error) {
+        if (error.name === 'AbortError') throw new Error('The request timed out. Check the server and retry.');
+        if (error instanceof TypeError) throw new Error('Could not reach the server. Check that live_app.py is running.');
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    async function explainSelection() {
+      if (explainButton.disabled) return;
+      explaining = true;
+      startButton.disabled = true;
+      explanationLanguage.disabled = true;
+      explainButton.disabled = true;
+      explanationError.textContent = '';
+      explanationText.textContent = '';
+      explanationAudio.pause();
+      explanationAudio.hidden = true;
+      const language = explanationLanguage.value;
+      const key = JSON.stringify([selectedPhrase, selectedContext, language]);
+      let entry = explanationCache.get(key);
+      try {
+        if (!entry) {
+          explanationStatus.textContent = 'Creating an explanation…';
+          const response = await postJson('/api/explain', {
+            phrase: selectedPhrase, context: selectedContext, language,
+          });
+          const result = await response.json();
+          if (result.language !== language) throw new Error('The server returned the wrong explanation language. Restart the server and retry.');
+          entry = { explanation: result.explanation, audioUrl: null };
+          explanationCache.set(key, entry);
+        }
+        explanationText.textContent = entry.explanation;
+        if (!entry.audioUrl) {
+          explanationStatus.textContent = 'Creating spoken explanation…';
+          const response = await postJson('/api/explanation-audio', {
+            explanation: entry.explanation, language,
+          });
+          entry.audioUrl = URL.createObjectURL(await response.blob());
+        }
+        explanationAudio.src = entry.audioUrl;
+        explanationAudio.hidden = false;
+        explanationStatus.textContent = 'Explanation ready. Repeated clicks reuse this session’s result.';
+        try { await explanationAudio.play(); }
+        catch { explanationStatus.textContent = 'Explanation ready. Press Play to listen.'; }
+      } catch (error) {
+        console.error('Phrase explanation failed:', error.message);
+        explanationError.textContent = error.message;
+        explanationStatus.textContent = entry ? 'Text is ready. Click Explain again to retry the audio.' : '';
+      } finally {
+        explaining = false;
+        startButton.disabled = false;
+        explanationLanguage.disabled = false;
+        updateExplainButton();
+      }
+    }
+
+    function sendAudio(buffer) {
+      const packet = new Uint8Array(buffer);
+      const combined = new Uint8Array(pendingAudio.length + packet.length);
+      combined.set(pendingAudio);
+      combined.set(packet, pendingAudio.length);
+      let offset = 0;
+      // 100 ms of mono PCM16 at 16 kHz = 3200 bytes.
+      while (combined.length - offset >= 3200) {
+        socket.send(combined.slice(offset, offset + 3200));
+        offset += 3200;
+      }
+      pendingAudio = combined.slice(offset);
+    }
+
+    function convertToPcm16(samples, inputRate, outputRate = 16000) {
+      const ratio = inputRate / outputRate;
+      const outputLength = Math.floor(samples.length / ratio);
+      const buffer = new ArrayBuffer(outputLength * 2);
+      const view = new DataView(buffer);
+
+      for (let i = 0; i < outputLength; i++) {
+        const start = Math.floor(i * ratio);
+        const end = Math.min(Math.floor((i + 1) * ratio), samples.length);
+        let sum = 0;
+        for (let j = start; j < end; j++) sum += samples[j];
+        const sample = Math.max(-1, Math.min(1, sum / Math.max(1, end - start)));
+        view.setInt16(i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      }
+
+      return buffer;
+    }
+
+    async function stopMicrophone() {
+      stopping = true;
+      if (audioProcessor) audioProcessor.disconnect();
+      if (microphone) microphone.disconnect();
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        if (pendingAudio.length) socket.send(pendingAudio);
+        socket.send('stop');
+        statusText.textContent = 'Finishing the last captions…';
+        const closingSocket = socket;
+        await Promise.race([
+          new Promise(resolve => closingSocket.addEventListener('close', resolve, { once: true })),
+          new Promise(resolve => setTimeout(resolve, 3000)),
+        ]);
+        closingSocket.close();
+      } else if (socket) socket.close();
+      if (stream) stream.getTracks().forEach(track => track.stop());
+      if (audioContext && audioContext.state !== 'closed') await audioContext.close();
+
+      socket = null;
+      stream = null;
+      audioContext = null;
+      microphone = null;
+      audioProcessor = null;
+      startButton.disabled = false;
+      stopButton.disabled = true;
+      statusText.textContent = 'Microphone is off.';
+      updateExplainButton();
+    }
+
+    async function startMicrophone() {
+      errorText.textContent = '';
+      startButton.disabled = true;
+      stopping = false;
+      selectedPhrase = '';
+      selectedContext = '';
+      selectedPhraseText.textContent = 'None';
+      explanationText.textContent = '';
+      explanationError.textContent = '';
+      explanationStatus.textContent = '';
+      explanationAudio.pause();
+      explanationAudio.removeAttribute('src');
+      explanationAudio.hidden = true;
+      for (const entry of explanationCache.values()) {
+        if (entry.audioUrl) URL.revokeObjectURL(entry.audioUrl);
+      }
+      explanationCache.clear();
+      updateExplainButton();
+      ready = false;
+      sourceText = '';
+      translationText = '';
+      pendingAudio = new Uint8Array(0);
+      sourceCaption.textContent = '—';
+      translatedCaption.textContent = '—';
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+        audioContext = new AudioContext();
+        await audioContext.resume();
+
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        socket = new WebSocket(`${protocol}//${location.host}/ws/continuous`);
+        socket.binaryType = 'arraybuffer';
+
+        await new Promise((resolve, reject) => {
+          socket.onmessage = event => {
+            let message;
+            try {
+              message = JSON.parse(event.data);
+              if (!message || typeof message.type !== 'string') throw new Error('Missing event type');
+            } catch (error) {
+              console.error('Invalid live-caption message:', error.message);
+              errorText.textContent = 'The server sent an invalid caption update. Stop and restart the microphone.';
+              reject(new Error(errorText.textContent));
+              stopMicrophone();
+              return;
+            }
+            if (message.type === 'status') {
+              statusText.textContent = message.message;
+              ready = true;
+              resolve();
+            }
+            if (message.type === 'source_delta') {
+              sourceText += message.text;
+              sourceCaption.textContent = sourceText;
+            }
+            if (message.type === 'translation_delta') {
+              translationText += message.text;
+              translatedCaption.textContent = translationText;
+            }
+            if (message.type === 'error') {
+              errorText.textContent = message.message;
+              reject(new Error(message.message));
+            }
+          };
+          socket.onerror = () => {
+            errorText.textContent = 'The live connection failed. Check the server output.';
+            reject(new Error(errorText.textContent));
+          };
+          socket.onclose = () => {
+            if (!stopping) {
+              reject(new Error(errorText.textContent || 'The live connection closed.'));
+              if (ready) {
+                if (!errorText.textContent) errorText.textContent = 'The live connection closed.';
+                stopMicrophone();
+              }
+            }
+          };
+        });
+
+        microphone = audioContext.createMediaStreamSource(stream);
+        audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+        audioProcessor.onaudioprocess = event => {
+          event.outputBuffer.getChannelData(0).fill(0);
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            const samples = event.inputBuffer.getChannelData(0);
+            sendAudio(convertToPcm16(samples, audioContext.sampleRate));
+          }
+        };
+        microphone.connect(audioProcessor);
+        audioProcessor.connect(audioContext.destination);
+
+        statusText.textContent = 'Listening…';
+        stopButton.disabled = false;
+      } catch (error) {
+        console.error('Microphone session failed:', error.message);
+        errorText.textContent = error.message;
+        await stopMicrophone();
+      }
+    }
+
+    startButton.addEventListener('click', startMicrophone);
+    stopButton.addEventListener('click', stopMicrophone);
+    document.addEventListener('mouseup', captureSelection);
+    document.addEventListener('keyup', captureSelection);
+    explainButton.addEventListener('click', explainSelection);
+    explanationLanguage.addEventListener('change', () => {
+      explanationAudio.pause();
+      explanationAudio.removeAttribute('src');
+      explanationAudio.hidden = true;
+      explanationText.textContent = '';
+      explanationError.textContent = '';
+      explanationStatus.textContent = `Click Explain and listen to get an explanation in ${explanationLanguage.value}.`;
+    });
+  </script>
+</body>
+</html>
