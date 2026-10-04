@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+from .memory_api import router as memory_router
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -35,6 +36,7 @@ GEMINI_MODEL = "gemini-3.1-flash-lite"
 LIVE_TRANSLATION_MODEL = "gemini-3.5-live-translate-preview"
 
 app = FastAPI(title="Live Translation Demo")
+app.include_router(memory_router)
 PAGE = REPO_ROOT / "frontend" / "live.html"
 gemini_client = None
 elevenlabs_client = None

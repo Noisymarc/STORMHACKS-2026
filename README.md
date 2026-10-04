@@ -2,15 +2,16 @@
 
 Our goal is real-time translation with personalized help for concepts the user
 finds confusing. The current demo provides live captions and spoken explanations
-on demand. Recognizing saved concepts and reading live translations aloud are
-planned features.
+on demand. TiDB now supports saved confusing concepts and remembered-help suggestions.
+Reading all live translations aloud is a planned feature.
 
 ## Repository layout
 
 ```text
 backend/
   live_app.py           FastAPI server, live translation, explanations and speech
-  tidb/                 Teammate's standalone memory/search module
+  memory_api.py         Saved-phrase and semantic-search endpoints
+  tidb/                 TiDB memory/search module
 frontend/
   live.html             Plain browser demo
 scripts/
@@ -97,7 +98,8 @@ The original
 
 The separate TiDB module keeps its own dependencies and setup instructions in
 [backend/tidb/README.md](backend/tidb/README.md). Optional TiDB settings are included
-in the root environment template; this demo does not yet call the database.
+in the root environment template. Database settings are optional for captions and
+explanations, but required for remembering confusing phrases.
 
 ### 5. Try the feature
 
@@ -112,8 +114,45 @@ in the root environment template; this demo does not yet call the database.
 Repeated requests for the same selected phrase, surrounding context and language
 reuse the explanation and audio in browser memory. Starting a new microphone
 session clears those results. If speech fails, the explanation text remains and
-clicking again retries just the audio. There is no database integration yet.
+clicking again retries just the audio.
 Phrase selection is manual text selection; automatic hover highlighting is future work.
+
+## Remember confusing phrases with TiDB
+
+Add `TIDB_HOST`, `TIDB_USER`, `TIDB_PASSWORD`, `TIDB_PORT` and `TIDB_DB_NAME`
+to your existing `.env` using the database's Connect settings, then restart the
+server. This module uses TiDB Cloud Starter on AWS with Auto Embedding support.
+Do not overwrite your Gemini/ElevenLabs keys when adding database settings.
+The app creates the memories table if it is missing.
+
+1. Stop recording, select a phrase and request an explanation.
+2. The phrase, its context, explanation and explanation language are saved to TiDB
+   in the background. Check the **Remembered help** status for confirmation.
+3. Start a new session in the same browser. Your saved concepts load automatically.
+4. Repeat a saved phrase to see **Recognized** help, or use related wording to see
+   a **Possibly related** suggestion.
+5. After stopping the microphone, click **Listen to saved explanation**. This reuses
+   the saved text without a Gemini explanation request. ElevenLabs generates audio
+   if that explanation has not already been played during this browser session.
+
+Exact matching ignores capitalization and punctuation and runs locally on transcript
+updates. Meaning-based searches use TiDB in the background, at most one ongoing
+search per page and no more frequently than every 2.5 seconds. Unchanged text is
+not searched again. Captions do not wait for search results; no Gemini generation
+requests are added for matching. TiDB search still has network/model latency and
+usage limits. Its provisional similarity threshold needs testing with real lectures.
+
+Full Japanese captions remain enabled. Remembered help is a separate panel; it
+does not yet replace captions with translations of only saved phrases or locate
+paraphrased words for inline highlighting. Saved explanations can be unsuitable
+in a different context, so semantic matches are labeled as suggestions.
+
+This local demo uses a random ID saved in browser storage, not a login. The same
+browser retains its ID across sessions; another browser or cleared storage uses a
+different ID. This is not authenticated access control and must be replaced before
+public deployment. Saved text goes to the configured database. Audio is cached in
+browser memory only. If TiDB is unconfigured or fails, captions and new explanations
+still work; the page reports the save/search failure separately.
 
 ## Technologies in plain language
 
@@ -122,7 +161,7 @@ Phrase selection is manual text selection; automatic hover highlighting is futur
 - **WebSockets:** keep the live audio/caption connection open so updates can arrive while you speak.
 - **Gemini:** translates live microphone audio and generates explanations when you click Explain.
 - **ElevenLabs:** reads the selected phrase's explanation aloud; it does not currently read all live captions aloud.
-- **TiDB:** stores and searches saved concepts in a separate module. It is not yet connected to the website.
+- **TiDB:** stores confusing phrases and explanations, and finds saved concepts related to incoming speech.
 
 ### Backend contract (for frontend integration)
 
@@ -134,12 +173,20 @@ Phrase selection is manual text selection; automatic hover highlighting is futur
 - Explanation languages: Japanese, French, Arabic, Hindi, English. Live captions are fixed to Japanese.
 - Explanation and explanation-audio requests happen on click. Live translation continuously
   sends microphone audio to Gemini. Both providers' usage limits still apply.
+- `GET /api/memories?user_id=<uuid>` lists that demo user's saved help.
+- `POST /api/memories` accepts `user_id`, `phrase`, `context`, `explanation` and `language`;
+  returns a string `id`. Repeated saves of the same phrase/context/language reuse a row
+  in the normal single-client flow; simultaneous clients can still create duplicates.
+- `POST /api/memories/search` accepts `user_id` and `transcript` (up to 600 characters);
+  returns related memories. It uses TiDB's semantic search, not Gemini.
 - The demo remains local and has no authentication. Configure access controls before public deployment.
 
 Automated local checks used simulated AI responses. A team member has also reported
 that the real selected-phrase explanation flow works. Each teammate should try it
 with their own keys; exact latency, explanation quality and sustained usage limits
 have not been independently benchmarked.
+The new database connection was checked with simulated stores and browser responses;
+real TiDB search accuracy, persistence and latency still need a trial with configured credentials.
 
 ### Troubleshooting
 

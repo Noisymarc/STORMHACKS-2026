@@ -35,7 +35,7 @@ def create_tidb_engine(
     ssl_ctx = ssl.create_default_context(cafile=ca_path)
     return create_engine(
         url,
-        connect_args={"ssl": ssl_ctx},
+        connect_args={"ssl": ssl_ctx, "connect_timeout": 10, "read_timeout": 15, "write_timeout": 15},
         pool_pre_ping=True,
         # TiDB Cloud Starter closes idle connections; recycle well before that.
         pool_recycle=300,
