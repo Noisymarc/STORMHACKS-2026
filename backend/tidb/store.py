@@ -14,13 +14,17 @@ from typing import Any
 from sqlalchemy import Engine, text
 
 from .client import engine_from_env
-from .schema import MEMORIES_TABLE, init_schema
+from .schema import EMBEDDING_MODEL, MEMORIES_TABLE, init_schema
 
 # Titan v2 cosine similarity between a short memory ("exponential growth") and a
 # full transcript sentence is low in absolute terms: ~0.26 for the related
 # memory vs <0.08 for unrelated ones in the demo. 0.15 sits between the two.
 # Provisional; re-tune as more real memories come in.
 DEFAULT_MIN_SIMILARITY = 0.15
+# A short term can match the wrong sense (feedback form vs feedback loop).
+# Confirm suggestions against the saved source example, without a schema change.
+DEFAULT_MIN_CONTEXT_SIMILARITY = 0.28
+LEGACY_MIN_SIMILARITY = 0.30
 
 
 @dataclass(frozen=True)
@@ -113,10 +117,13 @@ class MemoryStore:
         limit: int = 5,
         min_similarity: float | None = DEFAULT_MIN_SIMILARITY,
         target_lang: str | None = None,
+        min_context_similarity: float = DEFAULT_MIN_CONTEXT_SIMILARITY,
     ) -> list[Memory]:
         """Memories of `user_id` closest in meaning to `transcript`, closest first.
 
-        Memories below `min_similarity` are dropped; pass None to keep all.
+        Suggestions must match both the term and its saved source example.
+        Legacy entries without an example require stronger term similarity.
+        Pass min_similarity=None for unfiltered diagnostic rankings.
         """
         _require_user_id(user_id)
         if not transcript or not transcript.strip():
@@ -138,9 +145,31 @@ class MemoryStore:
                 """),
                 parameters,
             ).all()
-        memories = [_to_memory(r, similarity=1.0 - float(r.distance)) for r in rows]
-        if min_similarity is not None:
-            memories = [m for m in memories if m.similarity >= min_similarity]
+            memories = [_to_memory(r, similarity=1.0 - float(r.distance)) for r in rows]
+            if min_similarity is None:
+                return memories
+            confirmed = []
+            for memory in memories:
+                if memory.similarity < min_similarity:
+                    continue
+                context = (memory.context or '').strip()
+                if not context or context.casefold() == memory.content.casefold():
+                    if memory.similarity >= max(min_similarity, LEGACY_MIN_SIMILARITY):
+                        confirmed.append(memory)
+                    continue
+                # A source example may omit the selected term (legacy/manual rows).
+                # Try the example alone, then the term with that example. Neither
+                # path relies on a shared word alone to confirm the meaning.
+                for example in (context[:1000], f'{memory.content}. {context[:1000]}'):
+                    context_distance = conn.execute(text(
+                        'SELECT VEC_COSINE_DISTANCE(EMBED_TEXT(:model, :context), '
+                        'EMBED_TEXT(:model, :transcript))'
+                    ), {'model': EMBEDDING_MODEL, 'context': example,
+                        'transcript': transcript}).scalar_one()
+                    if 1.0 - float(context_distance) >= min_context_similarity:
+                        confirmed.append(memory)
+                        break
+            memories = confirmed
         return memories
 
     def list_memories(self, user_id: str) -> list[Memory]:

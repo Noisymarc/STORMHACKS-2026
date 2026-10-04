@@ -77,8 +77,10 @@ flowchart LR
 - **ElevenLabs:** speaks explanation text in the selected help language. It does not
   currently speak the continuous live captions.
 - **TiDB Cloud:** stores active glossary entries and retrieves related phrases. Its Titan
-  Auto Embedding vector represents the saved phrase (`content`), not its context. Semantic
-  matches are suggestions and may not fit the current lecture.
+  stored Auto Embedding vector represents the saved phrase (`content`). Searches also
+  compare the new sentence with the saved source example using TiDB embeddings; this
+  needs no table migration or Gemini call. Semantic matches remain suggestions and may
+  not fit the current lecture.
 
 Glossary searches run in the background; captions do not wait for database results.
 Saved entries are scoped by browser demo ID and selected help language. The shared demo

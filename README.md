@@ -168,10 +168,16 @@ Exact matching ignores capitalization and punctuation and runs locally on transc
 updates. Active help follows the current sentence and clears after 12 seconds of
 silence while listening. Historical highlights remain clickable. Meaning-based searches
 use TiDB in the background, at most one ongoing
-search per page and no more frequently than every 2.5 seconds. Unchanged text is
-not searched again. Captions do not wait for search results; no Gemini generation
+search per page and no more frequently than every 750 milliseconds. Brief caption
+pauses allow a search after 150 milliseconds; continuous speech is checked roughly
+once a second when the database is keeping up. Sentences need at least four words;
+exact highlights have no such delay or word minimum. Unchanged text is not searched
+again. Captions do not wait for search results; no Gemini generation
 requests are added for matching. TiDB search still has network/model latency and
-usage limits. Its provisional similarity threshold needs testing with real lectures.
+usage limits. Suggestions must also match the saved source example, checked using
+TiDB embeddings. This helps distinguish a systems **feedback loop** from a university
+**feedback form** while preserving paraphrases. Entries without a source example use
+a stronger phrase threshold. The thresholds remain provisional and need varied lectures.
 
 Full Japanese captions remain enabled. Exact terms are highlighted, while semantic
 suggestions do not claim a precise matching location. Saved explanations show their
@@ -231,12 +237,22 @@ Automated local checks used simulated AI responses. A team member has also repor
 that the real selected-phrase explanation flow works. Each teammate should try it
 with their own keys; exact latency, explanation quality and sustained usage limits
 have not been independently benchmarked.
-The earlier memory flow passed a real TiDB trial: persistence, browser refresh and
-exact matching worked; two of three paraphrases matched, and three unrelated sentences
-were rejected. Searches took 51–489 ms in that small sample, plus any browser scheduling
-wait. The glossary rework has syntax/structure checks; its new UI, structured AI output,
-entry updates and removal still need an end-to-end trial. The earlier results do not
-verify this new flow.
+A browser replay streamed 11 synthetic lecture sentences through the real glossary
+API and connected TiDB: all eight intended matches were recalled and all three negative
+sentences rejected, including **feedback form** versus **feedback loop**. Saved Japanese
+help, refresh, entry removal, duplicate saves and browser identity separation passed.
+Semantic results settled 213–332 ms after the final caption packet in that small replay,
+compared with 1933–2611 ms before the scheduling change. This is fixture evidence,
+not a guarantee for real lectures, cold embedding requests or larger glossaries.
+The six real database regression checks can run without pytest:
+
+```powershell
+& ".\.venv\Scripts\python.exe" -m unittest discover -s tests -p test_glossary_matching.py -v
+```
+
+They use isolated temporary users and delete their rows. Missing TiDB settings skip
+the database tests. The replay supplied transcript/translation messages; it did not
+verify Gemini speech recognition, newly generated explanations or ElevenLabs audio.
 
 ### Troubleshooting
 
