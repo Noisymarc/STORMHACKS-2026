@@ -44,17 +44,26 @@ Then run the demo or integration tests:
 ```powershell
 & ".\.venv\Scripts\python.exe" -m backend.tidb.demo
 & ".\.venv\Scripts\python.exe" -m pytest tests/tidb
+& ".\.venv\Scripts\python.exe" -m unittest discover -s tests -p test_glossary_matching.py -v
 ```
 
 Database integration tests skip without TiDB credentials. The demo creates a table,
 adds temporary example memories, and deletes those example rows afterward.
+
+Semantic suggestions first rank the stored phrase vectors, then confirm candidates
+against their saved English source example using `EMBED_TEXT` and `VEC_COSINE_DISTANCE`.
+If needed, the example is compared again with the term included. The provisional
+thresholds are 0.15 for the phrase and 0.28 for its context; entries without an example
+require phrase similarity of 0.30. Passing `min_similarity=None` returns diagnostic
+rankings without these guards. There is no schema migration, and changing a saved
+example affects the next search. Context checks add TiDB embedding work and latency.
 
 ## Dictionary file: copy the saved phrases to another device
 
 The saved phrases (the `memories` table) can be written to a plain `.txt` "dictionary" file and
 imported somewhere else, to give another device or database the same phrases.
 
-**In the browser** (page section *Remembered help* → *Dictionary file*):
+**In the browser** (page section *My glossary* → *Dictionary file*):
 
 - **Download dictionary (.txt)** saves this browser's phrases.
 - **Import dictionary file** adds the phrases in a file to *this browser's* saved phrases. Phrases

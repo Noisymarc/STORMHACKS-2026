@@ -8,6 +8,7 @@ Reading all live translations aloud is a planned feature.
 ## Current features
 
 - Live original transcript and Japanese captions.
+- Paste a transcript or upload a UTF-8 `.txt` file and translate it into Japanese.
 - Select a confusing phrase after stopping to get a translation and spoken explanation.
 - Save phrases in a personal glossary and highlight exact terms in later speech.
 - Show short help in the selected language; expand explanations when needed.
@@ -15,6 +16,36 @@ Reading all live translations aloud is a planned feature.
 
 The glossary code has syntax and structure checks. Its full microphone/AI/database
 flow still needs a demo trial; merging the code does not verify those runtime results.
+
+## Translate a pasted or uploaded transcript
+
+With the microphone stopped, click **Paste transcript**. Clipboard text is loaded
+when the browser permits it; otherwise paste directly into the labeled field.
+Alternatively choose a UTF-8 `.txt` file, then click **Translate to Japanese**.
+The original and translation replace the reading panes only after a successful
+response. Select words in the imported original to use the existing explanations
+and glossary. Starting the microphone begins a new lecture and clears those panes.
+
+The limit is 20,000 characters and 100 KB per file. Longer material should be split
+into sections. Failed requests preserve the input and previous reading panes.
+PDF, Word and audio uploads are not supported by this text input.
+
+`POST /api/translate-transcript` accepts `{"transcript": "lecture text"}` and
+returns `transcript`, `translation` and `language` (`Japanese`). It uses the
+existing Gemini key/model; it needs neither a microphone nor ElevenLabs.
+The submitted full transcript is not saved to TiDB; selected phrases are saved
+through the existing glossary flow. Generation still uses the Gemini API.
+
+Checks with existing environments:
+
+```powershell
+& ".\.venv\Scripts\python.exe" -m unittest discover -s tests -p test_transcript_translation.py -v
+& "C:\Users\shabd\.config\opencode\runtimes\webapp-testing\Scripts\python.exe" tests/ui/verify_workspace.py
+```
+
+These checks use simulated Gemini output; they do not establish real translation
+quality. API implementation follows the [official Python SDK](https://googleapis.github.io/python-genai/#generate-content-asynchronous-non-streaming).
+Clipboard fallback follows [browser clipboard permissions](https://developer.mozilla.org/en-US/docs/Web/API/Clipboard/readText).
 
 ## Repository layout
 
@@ -24,7 +55,10 @@ backend/
   memory_api.py         Saved-phrase and semantic-search endpoints
   tidb/                 TiDB memory/search module
 frontend/
-  live.html             Plain browser demo
+  live.html             Lecture workspace and browser behavior
+  live.css              Shared interface styles
+design-system/
+  lecture-translation/  Interface rules for the team
 scripts/
   translate_demo.py     Earlier terminal translation demo
 docs/
@@ -38,6 +72,10 @@ live_app.py             Launcher preserving the original run command
 ```
 
 ## Local demo: Japanese captions and spoken explanations
+
+For an online demo at **classclarity.tech**, see [hosting setup](docs/hosting.md).
+The Render Free configuration is included in `render.yaml`. Deployment and DNS
+verification must finish before the domain will serve this app.
 
 This demo runs on your own computer. You need Git, Python 3.10 or newer,
 a microphone, and a Gemini API key with access to the configured models.
@@ -132,6 +170,13 @@ clicking again retries just the audio.
 New phrases are selected manually. Saved phrases are highlighted automatically in
 the original transcript; click, hover or focus a highlighted term to see its saved help.
 
+Japanese captions appear above the original English transcript. Explanations and
+remembered help sit beside them on larger screens, and below them on phones.
+Each caption pane follows incoming text until you scroll back; **Jump to live**
+returns to the latest words. Caption areas can also be focused and scrolled with
+the keyboard. Interface rules live in
+[design-system/lecture-translation/MASTER.md](design-system/lecture-translation/MASTER.md).
+
 ## Remember confusing phrases with TiDB
 
 Add `TIDB_HOST`, `TIDB_USER`, `TIDB_PASSWORD`, `TIDB_PORT` and `TIDB_DB_NAME`
@@ -168,10 +213,16 @@ Exact matching ignores capitalization and punctuation and runs locally on transc
 updates. Active help follows the current sentence and clears after 12 seconds of
 silence while listening. Historical highlights remain clickable. Meaning-based searches
 use TiDB in the background, at most one ongoing
-search per page and no more frequently than every 2.5 seconds. Unchanged text is
-not searched again. Captions do not wait for search results; no Gemini generation
+search per page and no more frequently than every 750 milliseconds. Brief caption
+pauses allow a search after 150 milliseconds; continuous speech is checked roughly
+once a second when the database is keeping up. Sentences need at least four words;
+exact highlights have no such delay or word minimum. Unchanged text is not searched
+again. Captions do not wait for search results; no Gemini generation
 requests are added for matching. TiDB search still has network/model latency and
-usage limits. Its provisional similarity threshold needs testing with real lectures.
+usage limits. Suggestions must also match the saved source example, checked using
+TiDB embeddings. This helps distinguish a systems **feedback loop** from a university
+**feedback form** while preserving paraphrases. Entries without a source example use
+a stronger phrase threshold. The thresholds remain provisional and need varied lectures.
 
 Full Japanese captions remain enabled. Exact terms are highlighted, while semantic
 suggestions do not claim a precise matching location. Saved explanations show their
@@ -179,17 +230,6 @@ original example because they can be unsuitable in a different context. For an e
 term, **Explain this occurrence** requests a fresh translation/explanation using the
 current lecture context after stopping. **Remove from glossary** retires a saved entry;
 it stops appearing in loads and searches. Neither action runs automatically.
-
-The **Manage saved phrases** list under **My glossary** always shows every saved phrase in
-the selected Help language. Phrases that appear in the live transcript are brought to the
-top as they are heard, the most recently heard first, and labelled **Heard in this lecture**;
-the rest stay below in their saved order. The list title shows how many have been heard
-(for example "Manage saved phrases (2 heard in this lecture)") even while the list is
-closed. "Heard" means exactly the exact-term highlights in the transcript, so the two always
-agree; the meaning-based "possibly related" suggestions stay in **Phrase help** and do not
-reorder the list. The order stays after you stop the microphone and resets when you start a
-new session. A saved explanation you have opened stays open while the list reorders. The
-logic is in `frontend/glossary-order.js`, which has Node tests (`tests/js/`).
 
 This local demo uses a random ID saved in browser storage, not a login. The same
 browser retains its ID across sessions; another browser or cleared storage uses a
@@ -247,12 +287,42 @@ Automated local checks used simulated AI responses. A team member has also repor
 that the real selected-phrase explanation flow works. Each teammate should try it
 with their own keys; exact latency, explanation quality and sustained usage limits
 have not been independently benchmarked.
-The earlier memory flow passed a real TiDB trial: persistence, browser refresh and
-exact matching worked; two of three paraphrases matched, and three unrelated sentences
-were rejected. Searches took 51–489 ms in that small sample, plus any browser scheduling
-wait. The glossary rework has syntax/structure checks; its new UI, structured AI output,
-entry updates and removal still need an end-to-end trial. The earlier results do not
-verify this new flow.
+A browser replay streamed 11 synthetic lecture sentences through the real glossary
+API and connected TiDB: all eight intended matches were recalled and all three negative
+sentences rejected, including **feedback form** versus **feedback loop**. Saved Japanese
+help, refresh, entry removal, duplicate saves and browser identity separation passed.
+Semantic results settled 213–332 ms after the final caption packet in that small replay,
+compared with 1933–2611 ms before the scheduling change. This is fixture evidence,
+not a guarantee for real lectures, cold embedding requests or larger glossaries.
+The six real database regression checks can run without pytest:
+
+```powershell
+& ".\.venv\Scripts\python.exe" -m unittest discover -s tests -p test_glossary_matching.py -v
+```
+
+They use isolated temporary users and delete their rows. Missing TiDB settings skip
+the database tests. The replay supplied transcript/translation messages; it did not
+verify Gemini speech recognition, newly generated explanations or ElevenLabs audio.
+
+### Optional interface replay
+
+`tests/ui/verify_workspace.py` checks the actual frontend with sample captions,
+simulated AI responses, a short audio tone, and an in-memory glossary. It verifies
+scrolling, Japanese help, keyboard controls, responsive layout, saving and failures.
+It uses no API keys, cloud database or paid requests. It is separate from a real
+microphone/provider trial and does not measure translation quality or latency.
+
+Run it from the repository with a Python environment that already contains
+Playwright and its Chromium browser:
+
+```powershell
+python tests/ui/verify_workspace.py
+```
+
+The project `.venv` must contain the normal demo dependencies. The replay starts
+its own server on an available port, leaves the normal demo server alone, and
+stops its server after checking. Its output gives the temporary folder containing
+screenshots and `report.json`. Playwright is optional for teammates running the app.
 
 ### Troubleshooting
 

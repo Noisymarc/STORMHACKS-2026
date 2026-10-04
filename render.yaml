@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: class-clarity
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m backend.live_app
+    healthCheckPath: /health
+    autoDeployTrigger: "off"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.12
+      - key: APP_ENV
+        value: production
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: TIDB_HOST
+        sync: false
+      - key: TIDB_PORT
+        value: "4000"
+      - key: TIDB_USER
+        sync: false
+      - key: TIDB_PASSWORD
+        sync: false
+      - key: TIDB_DB_NAME
+        value: test

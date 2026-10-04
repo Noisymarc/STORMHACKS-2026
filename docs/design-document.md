@@ -54,7 +54,8 @@ Saved concepts in the selected help language load when a session starts:
 
 - JavaScript recognizes saved wording locally, ignoring capitalization and punctuation,
   and highlights exact terms. Hover, click or keyboard focus shows their short translation.
-- TiDB searches by meaning in the background to suggest concepts expressed differently.
+- TiDB searches by meaning in the background to suggest concepts expressed differently,
+  and checks the saved source example to reduce matches caused by a shared word alone.
 - Help follows the current sentence; semantic suggestions appear as **Possibly related**
   without claiming a precise location. Active help clears after 12 seconds of silence.
 
@@ -75,13 +76,26 @@ help language and Japanese speech requires Japanese explanation text.
 
 | Technology | Role |
 | --- | --- |
-| HTML and JavaScript | Capture microphone audio, display captions, select phrases, match saved wording and play speech. |
+| HTML, CSS and JavaScript | Capture microphone audio, present the lecture workspace, select phrases, match saved wording and play speech. |
 | Python, FastAPI and Uvicorn | Run the local server and coordinate AI and database requests. |
 | WebSockets | Maintain the continuous audio and caption connection. |
 | Gemini Live Translate | Produce the original transcript and Japanese captions directly from microphone audio. |
 | Gemini Flash Lite | Generate a short translation and contextual explanation in one requested response. |
 | ElevenLabs | Read explanation text aloud in the selected language. |
 | TiDB with Titan Auto Embedding | Store the glossary in the cloud and find related concepts by meaning. |
+
+## Interface design
+
+Japanese captions lead the reading area, with the original transcript underneath.
+Phrase explanations, remembered help and glossary controls sit alongside them on
+desktop and below on smaller screens. Each caption pane follows new text until
+the reader scrolls back; **Jump to live** resumes following. Help language defaults
+to Japanese and is clearly separate from the fixed live-caption language.
+
+The shared [interface rules](../design-system/lecture-translation/MASTER.md) define
+Japanese-capable fonts, colors, keyboard access, error states and streaming behavior.
+UI UX Pro Max v2.15.0 informed these rules; its generic marketing-page recommendations
+were unsuitable for this lecture workspace and were not adopted.
 
 ## How remembered help avoids extra Gemini requests
 
@@ -90,7 +104,10 @@ requests and hit a rate limit. Captions now use an ongoing Gemini Live audio con
 Local phrase matching and TiDB semantic search add no Gemini generation requests.
 
 Semantic searches examine recent transcript text no more frequently than every
-2.5 seconds, with only one search running per page. Unchanged text is skipped.
+750 milliseconds, with only one search running per page. After a brief caption pause,
+search can start after 150 milliseconds; during continuous speech it runs roughly once
+a second when the database is keeping up. Semantic searches need four words of context.
+Unchanged text is skipped. Exact phrase highlights update directly on caption packets.
 Captions never wait for a search or save to finish.
 
 Translations are stored in existing memory metadata; no table migration is required.
@@ -102,10 +119,12 @@ and its matching threshold needs tuning with real lecture examples.
 
 ## Current limits and next steps
 
-1. **Try the new glossary flow end to end:** save a translated entry, refresh, recognize
-   it later, change language, update its explanation and remove it. Earlier real TiDB
-   checks matched two of three paraphrases and rejected three unrelated examples;
-   this is not verification of the new flow or a general accuracy benchmark.
+1. **Verify the real AI services together:** the synthetic browser replay with real
+   TiDB recalled all eight intended matches and rejected three negative sentences.
+   Save/refresh, Japanese help, browser identity separation and removal passed; the
+   replay supplied caption messages, so real Gemini and ElevenLabs output still needs
+   a combined run. Semantic help settled 213–332 ms after the last packet in this small
+   fixture, not a general latency or accuracy benchmark.
 2. **Improve phrase interaction:** new phrases are selected manually after stopping.
    Locating paraphrases precisely and recognizing unfamiliar concepts remain future work.
 3. **Decide on phrase-only translation:** the current app provides full captions plus

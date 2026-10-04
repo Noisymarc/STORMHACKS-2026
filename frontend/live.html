@@ -3,68 +3,125 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Live Translation Demo</title>
+  <title>Lecture translation</title>
+  <link rel="stylesheet" href="/static/live.css">
 </head>
 <body>
-  <h1>Live Translation Demo</h1>
-  <p>Gemini listens directly to your microphone and streams Japanese captions. This demo displays captions only; generated audio is not played.</p>
+  <a class="skip-link" href="#lecture">Skip to captions</a>
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="app-title">
+        <h1>Lecture translation</h1>
+        <p>English speech · Japanese captions</p>
+      </div>
+      <div class="session-controls" aria-label="Microphone controls">
+        <button id="paste-transcript-button" type="button" aria-expanded="false" aria-controls="transcript-import">Paste transcript</button>
+        <button id="start-button" class="primary-button" type="button">Start microphone</button>
+        <button id="stop-button" type="button" disabled>Stop</button>
+      </div>
+    </div>
+  </header>
 
-  <button id="start-button" type="button">Start microphone</button>
-  <button id="stop-button" type="button" disabled>Stop</button>
-  <p id="status" role="status">Microphone is off.</p>
-  <p id="error" role="alert"></p>
+  <main id="lecture" class="workspace" tabindex="-1">
+    <div class="session-status">
+      <p id="status" role="status" aria-atomic="true">Microphone is off.</p>
+      <p id="error" class="error-message" role="alert"></p>
+    </div>
 
-  <label for="explanation-language">Help language</label>
-  <select id="explanation-language">
-    <option>Japanese</option>
-    <option>French</option>
-    <option>Arabic</option>
-    <option>Hindi</option>
-    <option>English</option>
-  </select>
-  <p>This changes glossary help and explanations. Live captions remain Japanese.</p>
+    <section id="transcript-import" class="transcript-import" aria-labelledby="transcript-import-heading" hidden>
+      <h2 id="transcript-import-heading">Translate a transcript</h2>
+      <p id="transcript-import-hint" class="supporting-text">Paste text or upload a UTF-8 .txt file. Up to 20,000 characters. Translation replaces the current reading panes.</p>
+      <label for="transcript-input">Transcript</label>
+      <textarea id="transcript-input" rows="6" aria-describedby="transcript-import-hint transcript-import-error"></textarea>
+      <label for="transcript-file">Upload a transcript (.txt)</label>
+      <input id="transcript-file" type="file" accept=".txt,text/plain" aria-describedby="transcript-import-hint transcript-import-error">
+      <div class="transcript-actions">
+        <button id="translate-transcript-button" class="primary-button" type="button" disabled>Translate to Japanese</button>
+        <button id="close-transcript-button" type="button">Close</button>
+      </div>
+      <p id="transcript-import-status" class="supporting-text" role="status"></p>
+      <p id="transcript-import-error" class="error-message" role="alert"></p>
+    </section>
 
-  <h2>Transcript</h2>
-  <p id="source-caption" aria-live="polite">—</p>
+    <div class="workspace-grid">
+      <div class="lecture-column">
+        <section class="caption-panel" aria-labelledby="translation-heading">
+          <div class="section-heading">
+            <h2 id="translation-heading">Japanese captions</h2>
+            <button id="translation-jump" class="jump-button" type="button" hidden>Jump to live</button>
+          </div>
+          <div id="translation-scroll" class="caption-scroll translation-scroll" role="region" aria-labelledby="translation-heading" tabindex="0">
+            <p id="translated-caption" lang="ja">—</p>
+          </div>
+        </section>
 
-  <section aria-labelledby="help-heading">
-    <h2 id="help-heading">Phrase help</h2>
-    <p>Highlighted words are in your glossary. Click or focus them for their saved translation. Related concepts are suggestions; their meaning may differ in this lecture.</p>
-    <p id="active-help-status" role="status">No remembered phrases in the current sentence.</p>
-    <ul id="memory-matches"></ul>
-  </section>
+        <section class="caption-panel transcript-panel" aria-labelledby="transcript-heading">
+          <div class="section-heading">
+            <h2 id="transcript-heading">Original transcript</h2>
+            <button id="transcript-jump" class="jump-button" type="button" hidden>Jump to live</button>
+          </div>
+          <div id="transcript-scroll" class="caption-scroll transcript-scroll" role="region" aria-labelledby="transcript-heading" tabindex="0">
+            <p id="source-caption" lang="en">—</p>
+          </div>
+          <p class="selection-hint">Stop the microphone, then select a phrase to explain. Highlighted phrases already have saved help.</p>
+        </section>
+      </div>
 
-  <h2>Japanese translation</h2>
-  <p id="translated-caption" aria-live="polite">—</p>
+      <aside class="help-column" aria-label="Phrase explanations and glossary">
+        <div class="help-settings">
+          <label for="explanation-language">Help language</label>
+          <select id="explanation-language">
+            <option>Japanese</option>
+            <option>French</option>
+            <option>Arabic</option>
+            <option>Hindi</option>
+            <option>English</option>
+          </select>
+          <p>For explanations and saved help. Captions stay Japanese.</p>
+        </div>
 
-  <h2>Explain a phrase</h2>
-  <p>After stopping the microphone, select words in the original transcript, then click Explain.</p>
-  <p>Selected phrase: <span id="selected-phrase">None</span></p>
-  <button id="explain-button" type="button" disabled>Explain and listen</button>
-  <p id="explanation-status" role="status"></p>
-  <p id="explanation-error" role="alert"></p>
-  <p id="phrase-translation"></p>
-  <p id="explanation-text" aria-live="polite"></p>
-  <audio id="explanation-audio" controls hidden></audio>
+        <section class="help-section" aria-labelledby="explanation-heading">
+          <h2 id="explanation-heading">Explain a phrase</h2>
+          <p class="field-label">Selected phrase</p>
+          <p id="selected-phrase" class="selected-phrase">None</p>
+          <button id="explain-button" class="primary-button" type="button" disabled>Explain and listen</button>
+          <p id="explanation-status" class="supporting-text" role="status"></p>
+          <p id="explanation-error" class="error-message" role="alert"></p>
+          <p id="phrase-translation" class="phrase-translation"></p>
+          <p id="explanation-text" class="explanation-text" aria-live="polite"></p>
+          <audio id="explanation-audio" controls hidden></audio>
+        </section>
 
-  <h2>My glossary</h2>
-  <p>Saved concepts belong to this browser's demo identity. Stop the microphone to listen. Remove a phrase when you no longer need help with it.</p>
-  <p id="memory-status" role="status">Checking saved help…</p>
-  <p id="memory-error" role="alert"></p>
-  <details id="glossary-library">
-    <summary>Manage saved phrases</summary>
-    <ul id="glossary-list"></ul>
-  </details>
+        <section class="help-section" aria-labelledby="help-heading">
+          <h2 id="help-heading">Remembered help</h2>
+          <p id="active-help-status" class="supporting-text" role="status">No remembered phrases in the current sentence.</p>
+          <ul id="memory-matches" class="help-list"></ul>
+          <p class="supporting-text">“Possibly related” is a suggestion. Check the saved example before using its explanation.</p>
+        </section>
 
-  <h3>Dictionary file</h3>
-  <p>Download your saved phrases as a text file, or import one from another device. Imported phrases are added to this browser's saved phrases; ones you already have are skipped.</p>
-  <button id="dictionary-export-button" type="button" disabled>Download dictionary (.txt)</button>
-  <label for="dictionary-import-file">Import dictionary file</label>
-  <input id="dictionary-import-file" type="file" accept=".txt,text/plain" disabled>
-  <p id="dictionary-status" role="status"></p>
-  <p id="dictionary-error" role="alert"></p>
+        <section class="help-section glossary-section" aria-labelledby="glossary-heading">
+          <h2 id="glossary-heading">My glossary</h2>
+          <p id="memory-status" class="supporting-text" role="status">Checking saved help…</p>
+          <p id="memory-error" class="error-message" role="alert"></p>
+          <details id="glossary-library">
+            <summary>Manage saved phrases</summary>
+            <ul id="glossary-list" class="help-list"></ul>
+          </details>
+          <p class="supporting-text">Saved for this browser. Stop the microphone to listen.</p>
+          <div class="dictionary-file">
+            <h3>Dictionary file</h3>
+            <p class="supporting-text">Copy your saved phrases to another device as a text file.</p>
+            <button id="dictionary-export-button" type="button" disabled>Download dictionary (.txt)</button>
+            <label for="dictionary-import-file">Import dictionary file</label>
+            <input id="dictionary-import-file" type="file" accept=".txt,text/plain" disabled>
+            <p id="dictionary-status" class="supporting-text" role="status"></p>
+            <p id="dictionary-error" class="error-message" role="alert"></p>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </main>
 
-  <script src="glossary-order.js"></script>
   <script>
     const startButton = document.querySelector('#start-button');
     const stopButton = document.querySelector('#stop-button');
@@ -84,12 +141,61 @@
     const memoryError = document.querySelector('#memory-error');
     const memoryMatches = document.querySelector('#memory-matches');
     const glossaryList = document.querySelector('#glossary-list');
-    const activeHelpStatus = document.querySelector('#active-help-status');
-    const languageCodes = { Japanese: 'ja', French: 'fr', Arabic: 'ar', Hindi: 'hi', English: 'en' };
     const dictionaryExportButton = document.querySelector('#dictionary-export-button');
     const dictionaryImportFile = document.querySelector('#dictionary-import-file');
     const dictionaryStatus = document.querySelector('#dictionary-status');
     const dictionaryError = document.querySelector('#dictionary-error');
+    const activeHelpStatus = document.querySelector('#active-help-status');
+    const languageCodes = { Japanese: 'ja', French: 'fr', Arabic: 'ar', Hindi: 'hi', English: 'en' };
+    const pasteTranscriptButton = document.querySelector('#paste-transcript-button');
+    const transcriptImport = document.querySelector('#transcript-import');
+    const transcriptInput = document.querySelector('#transcript-input');
+    const transcriptFile = document.querySelector('#transcript-file');
+    const translateTranscriptButton = document.querySelector('#translate-transcript-button');
+    const closeTranscriptButton = document.querySelector('#close-transcript-button');
+    const transcriptImportStatus = document.querySelector('#transcript-import-status');
+    const transcriptImportError = document.querySelector('#transcript-import-error');
+    const MAX_TRANSCRIPT_CHARACTERS = 20000;
+
+    // Each reading pane follows new text until the reader scrolls back or focuses
+    // a saved phrase. Batch layout work into one frame per pane.
+    function captionView(viewport, content, jumpButton) {
+      let following = true;
+      let scheduled = false;
+      function readingText() {
+        const selection = window.getSelection();
+        return content.contains(document.activeElement) ||
+          (selection && !selection.isCollapsed && content.contains(selection.anchorNode));
+      }
+      function update() {
+        if (scheduled) return;
+        scheduled = true;
+        requestAnimationFrame(() => {
+          scheduled = false;
+          if (readingText()) following = false;
+          if (following) viewport.scrollTop = viewport.scrollHeight;
+          jumpButton.hidden = (following || viewport.scrollHeight <= viewport.clientHeight + 4) &&
+            document.activeElement !== jumpButton;
+        });
+      }
+      viewport.addEventListener('scroll', () => {
+        following = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop < 24 && !readingText();
+        update();
+      }, { passive: true });
+      jumpButton.addEventListener('click', () => {
+        following = true;
+        // Keep the clicked control focused and available until focus leaves it.
+        viewport.scrollTop = viewport.scrollHeight;
+      });
+      jumpButton.addEventListener('blur', update);
+      const observer = new MutationObserver(update);
+      observer.observe(content, { childList: true, characterData: true, subtree: true });
+      return { reset() { following = true; viewport.scrollTop = 0; update(); } };
+    }
+    const captionViews = [
+      captionView(document.querySelector('#translation-scroll'), translatedCaption, document.querySelector('#translation-jump')),
+      captionView(document.querySelector('#transcript-scroll'), sourceCaption, document.querySelector('#transcript-jump')),
+    ];
 
     let socket = null;
     let stream = null;
@@ -104,6 +210,9 @@
     let selectedPhrase = '';
     let selectedContext = '';
     let explaining = false;
+    let transcriptBusy = false;
+    let transcriptInputVersion = 0;
+    let clipboardReadVersion = 0;
     const explanationCache = new Map();
     let demoUserId = null;
     let savedMemories = [];
@@ -111,15 +220,13 @@
     let memorySession = 0;
     let searchBusy = false;
     let lastSearchText = '';
-    let lastSearchAt = 0;
+    let lastSearchAt = -Infinity;
     let memoryLoadVersion = 0;
     let semanticMemories = [];
     let semanticSentenceStart = -1;
     let sourceUpdatedAt = 0;
     let focusedMemoryId = null;
     let lastHelpSignature = '';
-    let glossaryLastSeen = new Map();   // saved phrase id -> where it last appears in the transcript
-    let lastGlossaryOrder = '';
     let lastTranscriptSignature = '';
     let transcriptSpans = [];
     const forgettingIds = new Set();
@@ -191,11 +298,6 @@
       const fragment = document.createDocumentFragment();
       let offset = 0;
       transcriptSpans = glossarySpans(sourceText);
-      // The phrases highlighted here are the ones that count as "heard": keep the glossary list in step.
-      glossaryLastSeen = GlossaryOrder.lastSeenFromSpans(transcriptSpans);
-      if (GlossaryOrder.orderSignature(GlossaryOrder.orderGlossary(selectedLanguageMemories(), glossaryLastSeen)) !== lastGlossaryOrder) {
-        renderGlossary();
-      }
       for (const span of transcriptSpans) {
         fragment.append(document.createTextNode(sourceText.slice(offset, span.start)));
         const mark = document.createElement('mark');
@@ -222,10 +324,16 @@
 
     function savedHelpItem(memory, labelText) {
       const item = document.createElement('li');
+      item.className = 'saved-help';
+      const kind = document.createElement('p');
+      kind.className = 'match-kind';
+      kind.textContent = labelText;
       const label = document.createElement('strong');
-      label.textContent = `${labelText}: ${memory.phrase}`;
+      label.textContent = memory.phrase;
       const translation = document.createElement('p');
+      translation.className = 'help-translation';
       translation.lang = languageCodes[explanationLanguage.value];
+      translation.dir = 'auto';
       translation.textContent = memory.translation || 'Short translation not saved yet. Open the saved explanation or update this entry.';
       const details = document.createElement('details');
       details.dataset.memoryId = memory.id;
@@ -234,13 +342,16 @@
       summary.dataset.helpKey = `${memory.id}:details`;
       const text = document.createElement('p');
       text.lang = languageCodes[explanationLanguage.value];
+      text.dir = 'auto';
       text.textContent = usableExplanation(memory) ? memory.explanation : `Update this entry to get an explanation in ${explanationLanguage.value}.`;
       const context = document.createElement('p');
+      context.className = 'supporting-text';
       context.textContent = `Saved example: ${memory.context || memory.phrase}`;
       details.append(summary, text, context);
       const listen = document.createElement('button');
       listen.type = 'button';
-      listen.textContent = 'Listen to saved explanation';
+      listen.textContent = 'Listen';
+      listen.setAttribute('aria-label', `Listen to the saved explanation of ${memory.phrase}`);
       listen.disabled = startButton.disabled || !usableExplanation(memory);
       listen.dataset.helpKey = `${memory.id}:listen`;
       listen.addEventListener('click', () => useSavedExplanation(memory));
@@ -279,12 +390,13 @@
       }
       const forget = document.createElement('button');
       forget.type = 'button';
-      forget.textContent = forgettingIds.has(memory.id) ? 'Removing…' : 'Remove from glossary';
+      forget.className = 'remove-button';
+      forget.textContent = forgettingIds.has(memory.id) ? 'Removing…' : 'Remove';
       forget.setAttribute('aria-label', `Remove ${memory.phrase} from my glossary`);
       forget.dataset.helpKey = `${memory.id}:forget`;
       forget.disabled = forgettingIds.has(memory.id) || explaining;
       forget.addEventListener('click', () => forgetMemory(memory));
-      item.append(label, translation, details, forget);
+      item.append(kind, label, translation, details, forget);
       return item;
     }
 
@@ -357,13 +469,7 @@
     function renderGlossary() {
       const expanded = new Set([...glossaryList.querySelectorAll('details[open]')].map(details => details.dataset.memoryId));
       const focusedKey = glossaryList.contains(document.activeElement) ? document.activeElement.dataset.helpKey : null;
-      // Every saved phrase stays in the list; phrases heard in the transcript come first.
-      const ordering = GlossaryOrder.orderGlossary(selectedLanguageMemories(), glossaryLastSeen);
-      lastGlossaryOrder = GlossaryOrder.orderSignature(ordering);
-      glossaryList.replaceChildren(...ordering.items.map(memory => savedHelpItem(
-        memory, ordering.heardIds.has(memory.id) ? 'Heard in this lecture' : 'Saved phrase')));
-      document.querySelector('#glossary-library summary').textContent = ordering.heardIds.size
-        ? `Manage saved phrases (${ordering.heardIds.size} heard in this lecture)` : 'Manage saved phrases';
+      glossaryList.replaceChildren(...selectedLanguageMemories().map(memory => savedHelpItem(memory, 'Saved phrase')));
       for (const details of glossaryList.querySelectorAll('details')) details.open = expanded.has(details.dataset.memoryId);
       if (focusedKey) [...glossaryList.querySelectorAll('[data-help-key]')].find(control => control.dataset.helpKey === focusedKey)?.focus({ preventScroll: true });
     }
@@ -403,12 +509,12 @@
         memoryStatus.textContent = `${savedMemories.length} saved phrases in ${language} loaded for this browser.`;
         matchKnownPhrases();
         renderGlossary();
+        updateDictionaryControls();
       } catch (error) {
         if (version !== memoryLoadVersion) return;
         memoryStatus.textContent = 'Saved help is unavailable; captions and explanations still work.';
         memoryError.textContent = error.message;
       }
-      updateDictionaryControls();
     }
 
     // ---- Dictionary file: copy the saved phrases to/from a text file -----------------------
@@ -478,7 +584,12 @@
       if (!memoriesEnabled || searchBusy || !socket || !sourceText.trim()) return;
       const transcript = currentSentence();
       if (!transcript || performance.now() - sourceUpdatedAt > 12000) return;
-      if (transcript === lastSearchText || performance.now() - lastSearchAt < 2500) return;
+      // Wait briefly for caption packets to settle, but still search during speech.
+      // One request at a time, at most once per 750 ms; no extra Gemini calls.
+      const now = performance.now();
+      if (normalized(transcript).split(' ').length < 4) return;
+      if (now - sourceUpdatedAt < 150 && now - lastSearchAt < 1000) return;
+      if (transcript === lastSearchText || now - lastSearchAt < 750) return;
       const session = memorySession;
       const language = explanationLanguage.value;
       const sentenceStart = currentSentenceStart();
@@ -501,7 +612,150 @@
 
     function updateExplainButton() {
       explainButton.disabled = explaining || startButton.disabled || !selectedPhrase;
+      updateTranscriptControls();
     }
+
+    function updateTranscriptControls() {
+      const unavailable = transcriptBusy || startButton.disabled || explaining;
+      pasteTranscriptButton.disabled = unavailable;
+      transcriptInput.disabled = unavailable;
+      transcriptFile.disabled = unavailable;
+      closeTranscriptButton.disabled = transcriptBusy;
+      const length = transcriptInput.value.trim().length;
+      translateTranscriptButton.disabled = unavailable || !length || transcriptInput.value.length > MAX_TRANSCRIPT_CHARACTERS || transcriptInput.getAttribute('aria-invalid') === 'true';
+      transcriptImport.setAttribute('aria-busy', String(transcriptBusy));
+    }
+
+    function validateTranscript(text) {
+      if (!text.trim()) throw new Error('Paste or upload a transcript with some text.');
+      if (text.length > MAX_TRANSCRIPT_CHARACTERS) throw new Error('This transcript exceeds 20,000 characters. Use a shorter section.');
+      if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/u.test(text)) throw new Error('The transcript must contain plain text. Choose a UTF-8 .txt file.');
+    }
+
+    function setTranscriptBusy(busy) {
+      transcriptBusy = busy;
+      startButton.disabled = busy;
+      explanationLanguage.disabled = busy;
+      updateExplainButton();
+    }
+
+    pasteTranscriptButton.addEventListener('click', async () => {
+      const inputVersion = transcriptInputVersion;
+      const clipboardVersion = ++clipboardReadVersion;
+      transcriptImport.hidden = false;
+      pasteTranscriptButton.setAttribute('aria-expanded', 'true');
+      transcriptImportError.textContent = '';
+      transcriptImportStatus.textContent = 'Paste your transcript below, or choose a .txt file.';
+      transcriptInput.focus();
+      try {
+        if (!navigator.clipboard?.readText) throw new Error('Clipboard unavailable');
+        const text = await navigator.clipboard.readText();
+        if (transcriptImport.hidden || startButton.disabled || explaining || inputVersion !== transcriptInputVersion || clipboardVersion !== clipboardReadVersion) return;
+        if (!text.trim()) return;
+        transcriptInput.value = text;
+        transcriptInput.dispatchEvent(new Event('input'));
+      } catch {
+        if (!transcriptImport.hidden && inputVersion === transcriptInputVersion && clipboardVersion === clipboardReadVersion) transcriptImportStatus.textContent = 'Paste directly into the Transcript field (Ctrl+V or your device’s Paste action), or choose a .txt file.';
+      }
+    });
+
+    closeTranscriptButton.addEventListener('click', () => {
+      transcriptImport.hidden = true;
+      pasteTranscriptButton.setAttribute('aria-expanded', 'false');
+      pasteTranscriptButton.focus();
+    });
+
+    transcriptInput.addEventListener('input', () => {
+      transcriptInputVersion += 1;
+      transcriptImportError.textContent = '';
+      transcriptInput.removeAttribute('aria-invalid');
+      if (transcriptInput.value.trim()) {
+        try { validateTranscript(transcriptInput.value); }
+        catch (error) {
+          transcriptImportError.textContent = error.message;
+          transcriptInput.setAttribute('aria-invalid', 'true');
+        }
+      }
+      transcriptImportStatus.textContent = `${transcriptInput.value.length.toLocaleString()} / 20,000 characters`;
+      updateTranscriptControls();
+    });
+
+    transcriptFile.addEventListener('change', async () => {
+      const file = transcriptFile.files[0];
+      if (!file || startButton.disabled || explaining) return;
+      transcriptInputVersion += 1;
+      transcriptImportError.textContent = '';
+      transcriptFile.removeAttribute('aria-invalid');
+      setTranscriptBusy(true);
+      try {
+        if (!/\.txt$/i.test(file.name)) throw new Error('Choose a UTF-8 .txt transcript file.');
+        if (file.size > 100000) throw new Error('The file exceeds 100 KB. Upload a smaller .txt file.');
+        const text = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer());
+        validateTranscript(text);
+        transcriptInput.value = text;
+        transcriptInput.dispatchEvent(new Event('input'));
+        transcriptImportStatus.textContent = `${file.name} loaded. Click Translate to Japanese.`;
+      } catch (error) {
+        transcriptImportError.textContent = error instanceof TypeError ? 'The file must be UTF-8 plain text.' : error.message;
+        transcriptFile.setAttribute('aria-invalid', 'true');
+      } finally {
+        transcriptFile.value = '';
+        setTranscriptBusy(false);
+        transcriptInput.focus();
+      }
+    });
+
+    translateTranscriptButton.addEventListener('click', async () => {
+      if (translateTranscriptButton.disabled) return;
+      transcriptImportError.textContent = '';
+      try { validateTranscript(transcriptInput.value); }
+      catch (error) { transcriptImportError.textContent = error.message; return; }
+      setTranscriptBusy(true);
+      transcriptImportStatus.textContent = 'Translating into Japanese…';
+      try {
+        const response = await postJson('/api/translate-transcript', { transcript: transcriptInput.value });
+        const result = await response.json();
+        if (result.language !== 'Japanese' || typeof result.translation !== 'string' || !result.translation.trim() || typeof result.transcript !== 'string') {
+          throw new Error('The server returned an invalid translation. Please retry.');
+        }
+        memorySession += 1;
+        selectedPhrase = '';
+        selectedContext = '';
+        selectedPhraseText.textContent = 'None';
+        explanationText.textContent = '';
+        phraseTranslation.textContent = '';
+        explanationStatus.textContent = '';
+        explanationError.textContent = '';
+        explanationAudio.pause();
+        explanationAudio.removeAttribute('src');
+        explanationAudio.hidden = true;
+        for (const entry of explanationCache.values()) if (entry.audioUrl) URL.revokeObjectURL(entry.audioUrl);
+        explanationCache.clear();
+        semanticMemories = [];
+        semanticSentenceStart = -1;
+        focusedMemoryId = null;
+        sourceText = result.transcript;
+        translationText = result.translation;
+        sourceUpdatedAt = performance.now();
+        lastTranscriptSignature = '';
+        lastSearchText = '';
+        lastSearchAt = -Infinity;
+        translatedCaption.textContent = translationText;
+        captionViews.forEach(view => view.reset());
+        matchKnownPhrases();
+        renderGlossary();
+        transcriptImportStatus.textContent = 'Translation ready. Select words in the original transcript for an explanation.';
+        statusText.textContent = 'Transcript translated · microphone is off.';
+        transcriptImport.hidden = true;
+        pasteTranscriptButton.setAttribute('aria-expanded', 'false');
+        document.querySelector('#translation-scroll').focus({ preventScroll: true });
+      } catch (error) {
+        transcriptImportError.textContent = error.message;
+        transcriptImportStatus.textContent = 'Your input and the previous reading panes have been kept. Retry when ready.';
+      } finally {
+        setTranscriptBusy(false);
+      }
+    });
 
     function captureSelection() {
       if (startButton.disabled || explaining) return;
@@ -563,6 +817,7 @@
       startButton.disabled = true;
       explanationLanguage.disabled = true;
       explainButton.disabled = true;
+      updateTranscriptControls();
       explanationError.textContent = '';
       explanationText.textContent = '';
       phraseTranslation.textContent = '';
@@ -589,8 +844,10 @@
         }
         explanationText.textContent = entry.explanation;
         explanationText.lang = languageCodes[language];
+        explanationText.dir = 'auto';
         phraseTranslation.textContent = entry.translation || '';
         phraseTranslation.lang = languageCodes[language];
+        phraseTranslation.dir = 'auto';
         if (demoUserId && !entry.saved) {
           // Saving is independent of audio generation and never holds up playback.
           entry.saved = 'pending';
@@ -706,7 +963,11 @@
     }
 
     async function startMicrophone() {
+      if (transcriptBusy) return;
+      transcriptImport.hidden = true;
+      pasteTranscriptButton.setAttribute('aria-expanded', 'false');
       errorText.textContent = '';
+      statusText.textContent = 'Requesting microphone access…';
       startButton.disabled = true;
       memorySession += 1;
       matchedMemories.clear();
@@ -741,6 +1002,7 @@
       sourceCaption.textContent = '—';
       lastTranscriptSignature = '';
       translatedCaption.textContent = '—';
+      captionViews.forEach(view => view.reset());
       matchKnownPhrases();
       renderGlossary();
 
@@ -748,6 +1010,7 @@
         stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
         audioContext = new AudioContext();
         await audioContext.resume();
+        statusText.textContent = 'Connecting live captions…';
 
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         socket = new WebSocket(`${protocol}//${location.host}/ws/continuous`);
@@ -847,7 +1110,9 @@
       loadSavedMemories();
     });
     loadSavedMemories();
-    setInterval(() => { matchKnownPhrases(); searchRelatedMemories(); }, 500);
+    updateTranscriptControls();
+    setInterval(matchKnownPhrases, 500);
+    setInterval(searchRelatedMemories, 100);
   </script>
 </body>
 </html>
