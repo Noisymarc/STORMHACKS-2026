@@ -24,7 +24,10 @@ backend/
   memory_api.py         Saved-phrase and semantic-search endpoints
   tidb/                 TiDB memory/search module
 frontend/
-  live.html             Plain browser demo
+  live.html             Lecture workspace and browser behavior
+  live.css              Shared interface styles
+design-system/
+  lecture-translation/  Interface rules for the team
 scripts/
   translate_demo.py     Earlier terminal translation demo
 docs/
@@ -131,6 +134,13 @@ session clears those results. If speech fails, the explanation text remains and
 clicking again retries just the audio.
 New phrases are selected manually. Saved phrases are highlighted automatically in
 the original transcript; click, hover or focus a highlighted term to see its saved help.
+
+Japanese captions appear above the original English transcript. Explanations and
+remembered help sit beside them on larger screens, and below them on phones.
+Each caption pane follows incoming text until you scroll back; **Jump to live**
+returns to the latest words. Caption areas can also be focused and scrolled with
+the keyboard. Interface rules live in
+[design-system/lecture-translation/MASTER.md](design-system/lecture-translation/MASTER.md).
 
 ## Remember confusing phrases with TiDB
 
@@ -253,6 +263,26 @@ The six real database regression checks can run without pytest:
 They use isolated temporary users and delete their rows. Missing TiDB settings skip
 the database tests. The replay supplied transcript/translation messages; it did not
 verify Gemini speech recognition, newly generated explanations or ElevenLabs audio.
+
+### Optional interface replay
+
+`tests/ui/verify_workspace.py` checks the actual frontend with sample captions,
+simulated AI responses, a short audio tone, and an in-memory glossary. It verifies
+scrolling, Japanese help, keyboard controls, responsive layout, saving and failures.
+It uses no API keys, cloud database or paid requests. It is separate from a real
+microphone/provider trial and does not measure translation quality or latency.
+
+Run it from the repository with a Python environment that already contains
+Playwright and its Chromium browser:
+
+```powershell
+python tests/ui/verify_workspace.py
+```
+
+The project `.venv` must contain the normal demo dependencies. The replay starts
+its own server on an available port, leaves the normal demo server alone, and
+stops its server after checking. Its output gives the temporary folder containing
+screenshots and `report.json`. Playwright is optional for teammates running the app.
 
 ### Troubleshooting
 

@@ -23,6 +23,7 @@ from elevenlabs import (
 )
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
@@ -37,6 +38,7 @@ LIVE_TRANSLATION_MODEL = "gemini-3.5-live-translate-preview"
 
 app = FastAPI(title="Live Translation Demo")
 app.include_router(memory_router)
+app.mount("/static", StaticFiles(directory=REPO_ROOT / "frontend"), name="static")
 PAGE = REPO_ROOT / "frontend" / "live.html"
 gemini_client = None
 elevenlabs_client = None
