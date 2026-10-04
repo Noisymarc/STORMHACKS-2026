@@ -8,6 +8,7 @@ Reading all live translations aloud is a planned feature.
 ## Current features
 
 - Live original transcript and Japanese captions.
+- Paste English text to translate it into Japanese like a normal translator (**Translate text**).
 - Select a confusing phrase after stopping to get a translation and spoken explanation.
 - Save phrases in a personal glossary and highlight exact terms in later speech.
 - Show short help in the selected language; expand explanations when needed.
@@ -118,6 +119,13 @@ explanations, but required for remembering confusing phrases.
 
 ### 5. Try the feature
 
+To translate text instead of speech, paste English text into **Translate text** (top of the
+page) and click **Translate** (or press Ctrl+Enter). The translation appears in the Japanese
+captions and the original in the transcript, from the top. Because pasted text uses the same
+transcript as speech, saved phrases in it are highlighted, you can select a phrase and click
+**Explain and listen** (which saves it to your glossary), and Remembered help and the glossary
+work as usual. See "Translate pasted text" below for the details.
+
 1. Click **Start microphone**, allow microphone access, and speak in English.
    The original transcript stays in English; translated captions appear in Japanese.
 2. **Help language** defaults to Japanese each time the page loads; choose another
@@ -224,8 +232,32 @@ There is no local database backup if a cloud save fails.
 - **ElevenLabs:** reads the selected phrase's explanation aloud; it does not currently read all live captions aloud.
 - **TiDB:** stores the personal glossary and finds saved concepts related to incoming speech.
 
+### Translate pasted text
+
+`POST /api/translate` (JSON `{ "text": "..." }`, up to 4000 characters; returns
+`{ "translation": "...", "language": "Japanese", "characters": n }`) is a plain translator that
+is independent of the microphone and the live connection. It makes one Gemini request per click,
+sends the pasted text as content to translate (never mixed into the instructions), keeps
+paragraph and line breaks, and refuses an answer that is empty, cut off at the token limit, or
+not Japanese. Errors use the same reference IDs as the other Gemini features.
+
+The page puts the pasted text and its translation into the same state the microphone fills, so
+these need no feature-specific code and work on pasted text: highlighting saved phrases,
+clicking a highlight for its saved help, selecting a phrase and **Explain and listen**, saving
+to the glossary, and the glossary list. Differences from live speech:
+
+- Starting the microphone replaces the pasted text with live captions, and **Translate** is
+  disabled while the microphone runs (a translation that finishes after you start recording is
+  not loaded).
+- The meaning-based "Possibly related" suggestions run only while listening, so pasted text gets
+  exact highlights but no related suggestions. Remembered help follows the last sentence.
+- The translation is always Japanese (like the captions); **Help language** still controls
+  explanations and the glossary.
+
 ### Backend contract (for frontend integration)
 
+- `POST /api/translate`: JSON `{ "text": "..." }`; returns `{ "translation": "...", "language": "Japanese", "characters": n }`.
+  Text limit is 4000 characters.
 - `POST /api/explain`: JSON `{ "phrase": "...", "context": "...", "language": "Japanese" }`;
   returns `{ "phrase": "...", "language": "Japanese", "translation": "...", "explanation": "..." }`.
   The phrase must occur in the context; phrase limit is 300 characters and context limit is 4000.

@@ -37,7 +37,9 @@ to TiDB, and it does not play Gemini's generated audio.
 ### 2. Understand a confusing phrase
 
 After stopping the microphone, the student selects words in the original transcript,
-chooses an explanation language, and clicks **Explain and listen**.
+chooses an explanation language, and clicks **Explain and listen**. Pasted English text can be
+translated the same way (**Translate text**): it is loaded into the same transcript, so highlighting,
+explaining and saving to the glossary work on it too.
 
 Gemini returns a short translation and explanation using nearby context in one request.
 ElevenLabs reads that explanation aloud. Available help languages are Japanese,

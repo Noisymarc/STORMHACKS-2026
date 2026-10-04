@@ -29,6 +29,20 @@
 
     <div class="workspace-grid">
       <div class="lecture-column">
+        <section class="paste-panel" aria-labelledby="paste-heading">
+          <h2 id="paste-heading">Translate text</h2>
+          <p class="supporting-text">Paste English text to translate it into Japanese. The text appears in the transcript below, so you can select a phrase to explain it and save it to your glossary, just like speech.</p>
+          <label class="field-label" for="paste-input">English text</label>
+          <textarea id="paste-input" lang="en" rows="5" maxlength="4000" placeholder="Paste or type English text here"></textarea>
+          <div class="paste-actions">
+            <button id="translate-text-button" class="primary-button" type="button" disabled>Translate</button>
+            <button id="clear-text-button" type="button" disabled>Clear</button>
+            <span id="paste-count" class="supporting-text" aria-hidden="true">0 / 4000</span>
+          </div>
+          <p id="paste-status" class="supporting-text" role="status"></p>
+          <p id="paste-error" class="error-message" role="alert"></p>
+        </section>
+
         <section class="caption-panel" aria-labelledby="translation-heading">
           <div class="section-heading">
             <h2 id="translation-heading">Japanese captions</h2>
@@ -118,6 +132,12 @@
     const glossaryList = document.querySelector('#glossary-list');
     const activeHelpStatus = document.querySelector('#active-help-status');
     const languageCodes = { Japanese: 'ja', French: 'fr', Arabic: 'ar', Hindi: 'hi', English: 'en' };
+    const pasteInput = document.querySelector('#paste-input');
+    const translateTextButton = document.querySelector('#translate-text-button');
+    const clearTextButton = document.querySelector('#clear-text-button');
+    const pasteCount = document.querySelector('#paste-count');
+    const pasteStatus = document.querySelector('#paste-status');
+    const pasteError = document.querySelector('#paste-error');
 
     // Each reading pane follows new text until the reader scrolls back or focuses
     // a saved phrase. Batch layout work into one frame per pane.
@@ -152,7 +172,12 @@
       jumpButton.addEventListener('blur', update);
       const observer = new MutationObserver(update);
       observer.observe(content, { childList: true, characterData: true, subtree: true });
-      return { reset() { following = true; viewport.scrollTop = 0; update(); } };
+      return {
+        reset() { following = true; viewport.scrollTop = 0; update(); },
+        // Pasted text is complete, so show it from the top instead of following the end.
+        showTop() { following = false; viewport.scrollTop = 0; update(); },
+        jumpButton,
+      };
     }
     const captionViews = [
       captionView(document.querySelector('#translation-scroll'), translatedCaption, document.querySelector('#translation-jump')),
@@ -523,6 +548,7 @@
 
     function updateExplainButton() {
       explainButton.disabled = explaining || startButton.disabled || !selectedPhrase;
+      updatePasteControls();
     }
 
     function captureSelection() {
@@ -578,6 +604,110 @@
     function postJson(url, payload) {
       return requestJson(url, 'POST', payload);
     }
+
+
+    // ---- Translate pasted text -------------------------------------------------------------
+    // Pasted text goes through the same two pieces of state the microphone fills (sourceText and
+    // translationText), so highlighting saved phrases, selecting a phrase to explain, saving it to the
+    // glossary and the glossary list all work on it exactly as they do on live speech.
+    let translatingText = false;
+    let pastedTextShown = false;
+
+    function updatePasteControls() {
+      const hasText = pasteInput.value.trim().length > 0;
+      pasteCount.textContent = `${pasteInput.value.length} / ${pasteInput.maxLength}`;
+      // startButton is disabled while the microphone is running (and while an explanation is loading).
+      translateTextButton.disabled = translatingText || startButton.disabled || !hasText;
+      clearTextButton.disabled = translatingText || (!hasText && !pastedTextShown);
+      if (startButton.disabled && !translatingText && hasText) pasteStatus.textContent = 'Stop the microphone to translate pasted text.';
+      else if (pasteStatus.textContent === 'Stop the microphone to translate pasted text.') pasteStatus.textContent = '';
+    }
+
+    function setJumpLabels(label) {
+      for (const view of captionViews) view.jumpButton.textContent = label;
+    }
+
+    // Replace the lecture text with `source` and its Japanese `translation`. Clears everything that
+    // belonged to the previous text (selection, explanation, related-phrase search) like starting a session.
+    function loadTextIntoLecture(source, translation) {
+      memorySession += 1;                       // drops any related-phrase search still in flight
+      matchedMemories.clear();
+      semanticMemories = [];
+      semanticSentenceStart = -1;
+      focusedMemoryId = null;
+      lastSearchText = '';
+      lastSearchAt = -Infinity;
+      selectedPhrase = '';
+      selectedContext = '';
+      selectedPhraseText.textContent = 'None';
+      explanationText.textContent = '';
+      phraseTranslation.textContent = '';
+      explanationError.textContent = '';
+      explanationStatus.textContent = '';
+      explanationAudio.pause();
+      explanationAudio.removeAttribute('src');
+      explanationAudio.hidden = true;
+      for (const entry of explanationCache.values()) {
+        if (entry.audioUrl) URL.revokeObjectURL(entry.audioUrl);
+      }
+      explanationCache.clear();
+      sourceText = source;
+      sourceUpdatedAt = performance.now();
+      translationText = translation;
+      lastTranscriptSignature = '';
+      translatedCaption.textContent = translation || '—';
+      pastedTextShown = Boolean(source);
+      setJumpLabels(source ? 'Jump to end' : 'Jump to live');
+      matchKnownPhrases();
+      renderGlossary();
+      captionViews.forEach(view => (source ? view.showTop() : view.reset()));
+      updateExplainButton();
+    }
+
+    async function translatePastedText() {
+      const text = pasteInput.value.trim();
+      if (!text || translateTextButton.disabled) return;
+      translatingText = true;
+      pasteError.textContent = '';
+      pasteStatus.textContent = 'Translating…';
+      updatePasteControls();
+      try {
+        const response = await postJson('/api/translate', { text });
+        const result = await response.json();
+        if (typeof result.translation !== 'string' || !result.translation.trim()) {
+          throw new Error('The server returned no translation. Try again.');
+        }
+        if (startButton.disabled) {
+          // The microphone (or an explanation) started while we waited: keep what is on screen.
+          pasteStatus.textContent = 'The translation finished after the microphone started, so it was not loaded. Stop the microphone and translate again.';
+          return;
+        }
+        loadTextIntoLecture(text, result.translation);
+        pasteStatus.textContent = 'Translated. Select a phrase in the original transcript to explain it.';
+      } catch (error) {
+        pasteStatus.textContent = '';
+        pasteError.textContent = error.message;
+      } finally {
+        translatingText = false;
+        updatePasteControls();
+      }
+    }
+
+    function clearPastedText() {
+      pasteInput.value = '';
+      pasteError.textContent = '';
+      pasteStatus.textContent = '';
+      if (pastedTextShown && !startButton.disabled) loadTextIntoLecture('', '');
+      updatePasteControls();
+      pasteInput.focus();
+    }
+
+    pasteInput.addEventListener('input', () => { pasteError.textContent = ''; updatePasteControls(); });
+    pasteInput.addEventListener('keydown', event => {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); translatePastedText(); }
+    });
+    translateTextButton.addEventListener('click', translatePastedText);
+    clearTextButton.addEventListener('click', clearPastedText);
 
     async function explainSelection() {
       if (explainButton.disabled) return;
@@ -766,6 +896,9 @@
       sourceCaption.textContent = '—';
       lastTranscriptSignature = '';
       translatedCaption.textContent = '—';
+      pastedTextShown = false;
+      pasteError.textContent = '';
+      setJumpLabels('Jump to live');
       captionViews.forEach(view => view.reset());
       matchKnownPhrases();
       renderGlossary();
