@@ -117,7 +117,8 @@ explanations, but required for remembering confusing phrases.
 
 1. Click **Start microphone**, allow microphone access, and speak in English.
    The original transcript stays in English; translated captions appear in Japanese.
-2. Choose a **Help language** (Japanese by default). Live captions remain Japanese.
+2. **Help language** defaults to Japanese each time the page loads; choose another
+   language for this session when desired. Live captions remain Japanese.
    Click **Stop** and wait until the page says **Microphone is off**.
    Then select a confusing phrase in the original transcript. Selection while listening is disabled.
 3. Click **Explain and listen**.

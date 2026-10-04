@@ -115,8 +115,6 @@
         demoUserId = crypto.randomUUID();
         localStorage.setItem('lecture-demo-user', demoUserId);
       }
-      const helpLanguage = localStorage.getItem('lecture-demo-language');
-      if (languageCodes[helpLanguage]) explanationLanguage.value = helpLanguage;
     } catch {
       memoryError.textContent = 'Browser storage is unavailable; saved help is disabled.';
     }
@@ -756,8 +754,6 @@
     document.addEventListener('keyup', captureSelection);
     explainButton.addEventListener('click', explainSelection);
     explanationLanguage.addEventListener('change', () => {
-      try { localStorage.setItem('lecture-demo-language', explanationLanguage.value); }
-      catch { memoryError.textContent = 'Help language could not be saved in this browser.'; }
       memorySession += 1;
       savedMemories = [];
       semanticMemories = [];
