@@ -41,4 +41,13 @@ Phrase selection is manual text selection; automatic hover highlighting is futur
 
 Local checks used simulated AI responses; actual explanation quality and ElevenLabs
 playback require testing with real keys.
+
+### Troubleshooting
+
+Unexpected AI-service failures show a reference ID on the page. Find the same ID
+in the server terminal to see the failing service, error type, status code and
+code locations. Diagnostics omit provider response bodies, API keys and transcript
+text. Explanation and speech requests have a 45-second server timeout; the browser
+also catches network failures and has a 60-second request timeout. These timeouts
+do not add a delay to live captions. Rate-limit errors are shown without automatic retries.
   

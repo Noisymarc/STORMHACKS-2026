@@ -4,8 +4,11 @@ import asyncio
 import base64
 import getpass
 import json
+import logging
 import os
 import time
+import traceback
+import uuid
 from contextlib import suppress
 from pathlib import Path
 from typing import Literal
@@ -37,6 +40,30 @@ elevenlabs_client = None
 GEMINI_MIN_REQUEST_GAP_SECONDS = 5.0
 gemini_request_lock = asyncio.Lock()
 last_gemini_request_at = 0.0
+logger = logging.getLogger("uvicorn.error")
+PROVIDER_TIMEOUT_SECONDS = 45
+
+
+def provider_failure(provider: str, exc: Exception) -> HTTPException:
+    """Log a safe diagnostic and give the page a matching reference ID."""
+    reference = uuid.uuid4().hex[:8]
+    code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    frames = " -> ".join(
+        f"{Path(frame.filename).name}:{frame.lineno} ({frame.name})"
+        for frame in traceback.extract_tb(exc.__traceback__)
+    )
+    # Exception messages/bodies may contain keys or transcript text: omit them.
+    logger.error("[%s] %s failed: %s, status=%s, locations=%s",
+                 reference, provider, type(exc).__name__, code, frames)
+    if isinstance(exc, TimeoutError):
+        status, message = 504, f"{provider} took too long. Please retry."
+    elif str(code) == "429":
+        status, message = 429, f"{provider} usage limit reached. Wait and retry later."
+    elif str(code) in {"401", "403"}:
+        status, message = 502, f"{provider} rejected access. Check the server API key and permissions."
+    else:
+        status, message = 502, f"{provider} request failed. Check the server terminal and retry."
+    return HTTPException(status, f"{message} Reference: {reference}")
 
 ExplanationLanguage = Literal["Japanese", "French", "Arabic", "Hindi", "English"]
 LANGUAGE_CODES = {"Japanese": "ja", "French": "fr", "Arabic": "ar", "Hindi": "hi", "English": "en"}
@@ -62,7 +89,7 @@ async def explain_phrase(request: ExplanationRequest):
     if gemini_client is None:
         raise HTTPException(503, "Start the server with a Gemini API key.")
     try:
-        result = await gemini_client.aio.models.generate_content(
+        result = await asyncio.wait_for(gemini_client.aio.models.generate_content(
             model=GEMINI_MODEL,
             contents=json.dumps({"phrase": phrase, "context": context}, ensure_ascii=False),
             config=types.GenerateContentConfig(
@@ -76,7 +103,7 @@ async def explain_phrase(request: ExplanationRequest):
                 ),
                 max_output_tokens=500,
             ),
-        )
+        ), timeout=PROVIDER_TIMEOUT_SECONDS)
         explanation = (result.text or "").strip()
         if not explanation:
             raise HTTPException(502, "Gemini returned an empty explanation. Try again.")
@@ -86,8 +113,7 @@ async def explain_phrase(request: ExplanationRequest):
     except HTTPException:
         raise
     except Exception as exc:
-        status = 429 if getattr(exc, "code", None) == 429 else 502
-        raise HTTPException(status, "Gemini could not create the explanation. Check quota and retry later.") from exc
+        raise provider_failure("Gemini explanation", exc) from exc
 
 
 @app.post("/api/explanation-audio")
@@ -105,14 +131,17 @@ async def explanation_audio(request: ExplanationAudioRequest):
             text=request.explanation,
             output_format="mp3_44100_128",
         )
-        audio = b"".join([chunk async for chunk in chunks])
+        async def collect_audio():
+            return b"".join([chunk async for chunk in chunks])
+
+        audio = await asyncio.wait_for(collect_audio(), timeout=PROVIDER_TIMEOUT_SECONDS)
         if not audio:
             raise HTTPException(502, "ElevenLabs returned no audio. You can still read the explanation.")
         return Response(audio, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(502, "ElevenLabs could not create speech. Check your key and credits, then retry.") from exc
+        raise provider_failure("ElevenLabs speech", exc) from exc
 
 
 @app.get("/")
@@ -233,7 +262,7 @@ async def continuous_translation(websocket: WebSocket):
     except Exception as exc:
         with suppress(Exception):
             await websocket.send_json(
-                {"type": "error", "message": f"Continuous translation failed: {exc}"}
+                {"type": "error", "message": provider_failure("Gemini live translation", exc).detail}
             )
             await websocket.close(code=1011)
 
@@ -280,7 +309,7 @@ async def live_translation(websocket: WebSocket):
                 )
         except Exception as exc:
             await websocket.send_json(
-                {"type": "error", "message": f"Translation failed: {exc}"}
+                {"type": "error", "message": provider_failure("Gemini text translation", exc).detail}
             )
 
     def schedule_translation(text: str, segment: int):
@@ -350,7 +379,7 @@ async def live_translation(websocket: WebSocket):
     except Exception as exc:
         with suppress(Exception):
             await websocket.send_json(
-                {"type": "error", "message": f"Live session failed: {exc}"}
+                {"type": "error", "message": provider_failure("ElevenLabs transcription", exc).detail}
             )
     finally:
         for task in translation_tasks:

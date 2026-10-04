@@ -100,15 +100,25 @@
     }
 
     async function postJson(url, payload) {
-      const response = await fetch(url, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) {
-        const problem = await response.json().catch(() => ({}));
-        throw new Error(typeof problem.detail === 'string' ? problem.detail : 'The request failed. Try again.');
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60000);
+      try {
+        const response = await fetch(url, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload), signal: controller.signal,
+        });
+        if (!response.ok) {
+          const problem = await response.json().catch(() => ({}));
+          throw new Error(typeof problem.detail === 'string' ? problem.detail : `Request failed (HTTP ${response.status}). Try again.`);
+        }
+        return response;
+      } catch (error) {
+        if (error.name === 'AbortError') throw new Error('The request timed out. Check the server and retry.');
+        if (error instanceof TypeError) throw new Error('Could not reach the server. Check that live_app.py is running.');
+        throw error;
+      } finally {
+        clearTimeout(timeout);
       }
-      return response;
     }
 
     async function explainSelection() {
@@ -147,6 +157,7 @@
         try { await explanationAudio.play(); }
         catch { explanationStatus.textContent = 'Explanation ready. Press Play to listen.'; }
       } catch (error) {
+        console.error('Phrase explanation failed:', error.message);
         explanationError.textContent = error.message;
         explanationStatus.textContent = entry ? 'Text is ready. Click Explain again to retry the audio.' : '';
       } finally {
@@ -254,7 +265,17 @@
 
         await new Promise((resolve, reject) => {
           socket.onmessage = event => {
-            const message = JSON.parse(event.data);
+            let message;
+            try {
+              message = JSON.parse(event.data);
+              if (!message || typeof message.type !== 'string') throw new Error('Missing event type');
+            } catch (error) {
+              console.error('Invalid live-caption message:', error.message);
+              errorText.textContent = 'The server sent an invalid caption update. Stop and restart the microphone.';
+              reject(new Error(errorText.textContent));
+              stopMicrophone();
+              return;
+            }
             if (message.type === 'status') {
               statusText.textContent = message.message;
               ready = true;
@@ -303,6 +324,7 @@
         statusText.textContent = 'Listening…';
         stopButton.disabled = false;
       } catch (error) {
+        console.error('Microphone session failed:', error.message);
         errorText.textContent = error.message;
         await stopMicrophone();
       }
