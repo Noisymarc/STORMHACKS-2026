@@ -76,13 +76,26 @@ help language and Japanese speech requires Japanese explanation text.
 
 | Technology | Role |
 | --- | --- |
-| HTML and JavaScript | Capture microphone audio, display captions, select phrases, match saved wording and play speech. |
+| HTML, CSS and JavaScript | Capture microphone audio, present the lecture workspace, select phrases, match saved wording and play speech. |
 | Python, FastAPI and Uvicorn | Run the local server and coordinate AI and database requests. |
 | WebSockets | Maintain the continuous audio and caption connection. |
 | Gemini Live Translate | Produce the original transcript and Japanese captions directly from microphone audio. |
 | Gemini Flash Lite | Generate a short translation and contextual explanation in one requested response. |
 | ElevenLabs | Read explanation text aloud in the selected language. |
 | TiDB with Titan Auto Embedding | Store the glossary in the cloud and find related concepts by meaning. |
+
+## Interface design
+
+Japanese captions lead the reading area, with the original transcript underneath.
+Phrase explanations, remembered help and glossary controls sit alongside them on
+desktop and below on smaller screens. Each caption pane follows new text until
+the reader scrolls back; **Jump to live** resumes following. Help language defaults
+to Japanese and is clearly separate from the fixed live-caption language.
+
+The shared [interface rules](../design-system/lecture-translation/MASTER.md) define
+Japanese-capable fonts, colors, keyboard access, error states and streaming behavior.
+UI UX Pro Max v2.15.0 informed these rules; its generic marketing-page recommendations
+were unsuitable for this lecture workspace and were not adopted.
 
 ## How remembered help avoids extra Gemini requests
 
