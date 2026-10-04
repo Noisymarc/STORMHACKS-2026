@@ -123,3 +123,6 @@ mark button:hover:enabled { background: var(--accent-soft); color: var(--text); 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; }
 }
+.dictionary-file { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border, #ddd); }
+.dictionary-file h3 { margin: 0 0 4px; font-size: 16px; }
+.dictionary-file label { display: block; margin-top: 12px; font-size: 14px; }

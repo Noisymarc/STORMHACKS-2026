@@ -108,6 +108,15 @@
             <ul id="glossary-list" class="help-list"></ul>
           </details>
           <p class="supporting-text">Saved for this browser. Stop the microphone to listen.</p>
+          <div class="dictionary-file">
+            <h3>Dictionary file</h3>
+            <p class="supporting-text">Copy your saved phrases to another device as a text file.</p>
+            <button id="dictionary-export-button" type="button" disabled>Download dictionary (.txt)</button>
+            <label for="dictionary-import-file">Import dictionary file</label>
+            <input id="dictionary-import-file" type="file" accept=".txt,text/plain" disabled>
+            <p id="dictionary-status" class="supporting-text" role="status"></p>
+            <p id="dictionary-error" class="error-message" role="alert"></p>
+          </div>
         </section>
       </aside>
     </div>
@@ -132,6 +141,10 @@
     const memoryError = document.querySelector('#memory-error');
     const memoryMatches = document.querySelector('#memory-matches');
     const glossaryList = document.querySelector('#glossary-list');
+    const dictionaryExportButton = document.querySelector('#dictionary-export-button');
+    const dictionaryImportFile = document.querySelector('#dictionary-import-file');
+    const dictionaryStatus = document.querySelector('#dictionary-status');
+    const dictionaryError = document.querySelector('#dictionary-error');
     const activeHelpStatus = document.querySelector('#active-help-status');
     const languageCodes = { Japanese: 'ja', French: 'fr', Arabic: 'ar', Hindi: 'hi', English: 'en' };
     const pasteTranscriptButton = document.querySelector('#paste-transcript-button');
@@ -496,12 +509,60 @@
         memoryStatus.textContent = `${savedMemories.length} saved phrases in ${language} loaded for this browser.`;
         matchKnownPhrases();
         renderGlossary();
+        updateDictionaryControls();
       } catch (error) {
         if (version !== memoryLoadVersion) return;
         memoryStatus.textContent = 'Saved help is unavailable; captions and explanations still work.';
         memoryError.textContent = error.message;
       }
     }
+
+    // ---- Dictionary file: copy the saved phrases to/from a text file -----------------------
+    function updateDictionaryControls() {
+      const available = memoriesEnabled && !!demoUserId;
+      dictionaryExportButton.disabled = !available;
+      dictionaryImportFile.disabled = !available;
+    }
+
+    dictionaryExportButton.addEventListener('click', async () => {
+      dictionaryError.textContent = '';
+      dictionaryStatus.textContent = 'Preparing the dictionary file…';
+      try {
+        const response = await fetch(`/api/memories/export?user_id=${encodeURIComponent(demoUserId)}`);
+        if (!response.ok) {
+          const problem = await response.json().catch(() => ({}));
+          throw new Error(typeof problem.detail === 'string' ? problem.detail : `Download failed (HTTP ${response.status}).`);
+        }
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(await response.blob());
+        link.download = `dictionary-${new Date().toISOString().slice(0, 10)}.txt`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+        dictionaryStatus.textContent = 'Dictionary file downloaded. Import it on another device to copy your saved phrases.';
+      } catch (error) {
+        dictionaryStatus.textContent = '';
+        dictionaryError.textContent = error instanceof TypeError ? 'Could not reach the server. Check that live_app.py is running.' : error.message;
+      }
+    });
+
+    dictionaryImportFile.addEventListener('change', async () => {
+      const file = dictionaryImportFile.files[0];
+      if (!file) return;
+      dictionaryError.textContent = '';
+      dictionaryStatus.textContent = 'Importing…';
+      try {
+        if (file.size > 1000000) throw new Error('That file is too large for the browser (limit 1 MB). Use the command line import instead.');
+        const response = await postJson('/api/memories/import', { user_id: demoUserId, text: await file.text() });
+        const result = await response.json();
+        dictionaryStatus.textContent = `Imported ${result.added} phrase(s); ${result.skipped_duplicates} were already saved.`;
+        await loadSavedMemories();
+      } catch (error) {
+        dictionaryStatus.textContent = '';
+        dictionaryError.textContent = error.message;
+      } finally {
+        dictionaryImportFile.value = '';   // allow choosing the same file again
+      }
+    });
 
     function matchKnownPhrases() {
       matchedMemories.clear();

@@ -266,6 +266,11 @@ There is no local database backup if a cloud save fails.
   The phrase must occur in the context; phrase limit is 300 characters and context limit is 4000.
 - `POST /api/explanation-audio`: JSON `{ "explanation": "...", "language": "Japanese" }`;
   returns MP3 bytes with `audio/mpeg`. Explanation limit is 1600 characters.
+- `GET /api/memories/export?user_id=<uuid>`: the user's saved phrases as a downloadable text file
+  (`text/plain`); `POST /api/memories/import`: JSON `{ "user_id": "<uuid>", "text": "<file contents>" }`
+  adds the phrases in such a file to that user and returns `{ "added": n, "skipped_duplicates": m }`
+  (up to 200 phrases; a file with any problem is refused with a 422 and nothing is imported).
+  See [backend/tidb/README.md](backend/tidb/README.md#dictionary-file-copy-the-saved-phrases-to-another-device).
 - Explanation languages: Japanese, French, Arabic, Hindi, English. Live captions are fixed to Japanese.
 - Explanation and explanation-audio requests happen on click. Live translation continuously
   sends microphone audio to Gemini. Both providers' usage limits still apply.

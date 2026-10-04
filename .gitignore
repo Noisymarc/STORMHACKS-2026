@@ -221,3 +221,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Exported dictionary files contain personal phrases and lecture text: never commit them
+dictionary-*.txt
