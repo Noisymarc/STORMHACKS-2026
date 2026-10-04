@@ -37,6 +37,12 @@
   <p id="explanation-text" aria-live="polite"></p>
   <audio id="explanation-audio" controls hidden></audio>
 
+  <h2>Remembered help</h2>
+  <p>Saved concepts can reappear here while you speak. Related wording is a suggestion, not a confirmed match. Stop the microphone to listen.</p>
+  <p id="memory-status" role="status">Checking saved help…</p>
+  <p id="memory-error" role="alert"></p>
+  <ul id="memory-matches"></ul>
+
   <script>
     const startButton = document.querySelector('#start-button');
     const stopButton = document.querySelector('#stop-button');
@@ -51,6 +57,9 @@
     const explanationError = document.querySelector('#explanation-error');
     const explanationText = document.querySelector('#explanation-text');
     const explanationAudio = document.querySelector('#explanation-audio');
+    const memoryStatus = document.querySelector('#memory-status');
+    const memoryError = document.querySelector('#memory-error');
+    const memoryMatches = document.querySelector('#memory-matches');
 
     let socket = null;
     let stream = null;
@@ -66,6 +75,109 @@
     let selectedContext = '';
     let explaining = false;
     const explanationCache = new Map();
+    let demoUserId = null;
+    let savedMemories = [];
+    let memoriesEnabled = false;
+    let memorySession = 0;
+    let searchBusy = false;
+    let lastSearchText = '';
+    let lastSearchAt = 0;
+    const matchedMemories = new Map();
+    try {
+      demoUserId = localStorage.getItem('lecture-demo-user');
+      if (!demoUserId || !/^[0-9a-f-]{36}$/i.test(demoUserId)) {
+        demoUserId = crypto.randomUUID();
+        localStorage.setItem('lecture-demo-user', demoUserId);
+      }
+    } catch {
+      memoryError.textContent = 'Browser storage is unavailable; saved help is disabled.';
+    }
+
+    function normalized(text) {
+      return text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    }
+
+    function renderRememberedHelp() {
+      memoryMatches.replaceChildren();
+      for (const { memory, exact } of matchedMemories.values()) {
+        const item = document.createElement('li');
+        const label = document.createElement('strong');
+        label.textContent = `${exact ? 'Recognized' : 'Possibly related'}: ${memory.phrase}`;
+        const text = document.createElement('p');
+        text.textContent = `${memory.language || 'Saved explanation'}: ${memory.explanation}`;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Listen to saved explanation';
+        button.disabled = startButton.disabled || !memory.explanation;
+        button.addEventListener('click', () => {
+          if (startButton.disabled) return;
+          selectedPhrase = memory.phrase;
+          selectedContext = memory.context || memory.phrase;
+          selectedPhraseText.textContent = selectedPhrase;
+          if (![...explanationLanguage.options].some(option => option.value === memory.language)) return;
+          explanationLanguage.value = memory.language;
+          const key = JSON.stringify([selectedPhrase, selectedContext, memory.language]);
+          if (!explanationCache.has(key)) explanationCache.set(key, {
+            explanation: memory.explanation, audioUrl: null, saved: true,
+          });
+          updateExplainButton();
+          explainSelection();
+        });
+        item.append(label, text, button);
+        memoryMatches.append(item);
+      }
+    }
+
+    async function loadSavedMemories() {
+      if (!demoUserId) { memoryStatus.textContent = 'Saved help is off.'; return; }
+      try {
+        const response = await fetch(`/api/memories?user_id=${encodeURIComponent(demoUserId)}`);
+        if (!response.ok) {
+          const problem = await response.json();
+          throw new Error(problem.detail || 'Could not load saved help.');
+        }
+        savedMemories = (await response.json()).memories;
+        memoriesEnabled = true;
+        memoryError.textContent = '';
+        memoryStatus.textContent = `${savedMemories.length} saved concepts loaded for this browser.`;
+      } catch (error) {
+        memoryStatus.textContent = 'Saved help is unavailable; captions and explanations still work.';
+        memoryError.textContent = error.message;
+      }
+    }
+
+    function matchKnownPhrases() {
+      const windowText = ` ${normalized(sourceText.slice(-600))} `;
+      for (const memory of savedMemories) {
+        if (windowText.includes(` ${normalized(memory.phrase)} `)) {
+          matchedMemories.set(memory.id, { memory, exact: true });
+        }
+      }
+      renderRememberedHelp();
+    }
+
+    async function searchRelatedMemories() {
+      if (!memoriesEnabled || searchBusy || !socket || !sourceText.trim()) return;
+      const transcript = sourceText.slice(-600).trim();
+      if (transcript === lastSearchText || performance.now() - lastSearchAt < 2500) return;
+      const session = memorySession;
+      lastSearchText = transcript;
+      lastSearchAt = performance.now();
+      searchBusy = true;
+      try {
+        const response = await postJson('/api/memories/search', { user_id: demoUserId, transcript });
+        const result = await response.json();
+        if (session !== memorySession) return;
+        for (const memory of result.memories) {
+          if (!matchedMemories.has(memory.id)) matchedMemories.set(memory.id, { memory, exact: false });
+        }
+        renderRememberedHelp();
+      } catch (error) {
+        if (session === memorySession) memoryError.textContent = error.message;
+      } finally {
+        searchBusy = false;
+      }
+    }
 
     function updateExplainButton() {
       explainButton.disabled = explaining || startButton.disabled || !selectedPhrase;
@@ -132,6 +244,8 @@
       explanationAudio.pause();
       explanationAudio.hidden = true;
       const language = explanationLanguage.value;
+      const phrase = selectedPhrase;
+      const context = selectedContext;
       const key = JSON.stringify([selectedPhrase, selectedContext, language]);
       let entry = explanationCache.get(key);
       try {
@@ -146,6 +260,25 @@
           explanationCache.set(key, entry);
         }
         explanationText.textContent = entry.explanation;
+        if (demoUserId && !entry.saved) {
+          // Saving is independent of audio generation and never holds up playback.
+          entry.saved = 'pending';
+          postJson('/api/memories', {
+            user_id: demoUserId, phrase, context,
+            explanation: entry.explanation, language,
+          }).then(async response => {
+            const result = await response.json();
+            entry.saved = true;
+            savedMemories.push({ id: result.id, phrase, context,
+              explanation: entry.explanation, language });
+            memoriesEnabled = true;
+            memoryStatus.textContent = 'Phrase and explanation saved for future sessions.';
+            memoryError.textContent = '';
+          }).catch(error => {
+            entry.saved = false;
+            memoryError.textContent = `Explanation works, but saving failed: ${error.message}`;
+          });
+        }
         if (!entry.audioUrl) {
           explanationStatus.textContent = 'Creating spoken explanation…';
           const response = await postJson('/api/explanation-audio', {
@@ -167,6 +300,7 @@
         startButton.disabled = false;
         explanationLanguage.disabled = false;
         updateExplainButton();
+        renderRememberedHelp();
       }
     }
 
@@ -229,11 +363,18 @@
       stopButton.disabled = true;
       statusText.textContent = 'Microphone is off.';
       updateExplainButton();
+      renderRememberedHelp();
     }
 
     async function startMicrophone() {
       errorText.textContent = '';
       startButton.disabled = true;
+      memorySession += 1;
+      matchedMemories.clear();
+      lastSearchText = '';
+      lastSearchAt = 0;
+      renderRememberedHelp();
+      loadSavedMemories();
       stopping = false;
       selectedPhrase = '';
       selectedContext = '';
@@ -286,6 +427,7 @@
             if (message.type === 'source_delta') {
               sourceText += message.text;
               sourceCaption.textContent = sourceText;
+              matchKnownPhrases();
             }
             if (message.type === 'translation_delta') {
               translationText += message.text;
@@ -345,6 +487,8 @@
       explanationError.textContent = '';
       explanationStatus.textContent = `Click Explain and listen to get an explanation in ${explanationLanguage.value}.`;
     });
+    loadSavedMemories();
+    setInterval(searchRelatedMemories, 500);
   </script>
 </body>
 </html>
