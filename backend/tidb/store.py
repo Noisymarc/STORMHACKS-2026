@@ -112,6 +112,7 @@ class MemoryStore:
         *,
         limit: int = 5,
         min_similarity: float | None = DEFAULT_MIN_SIMILARITY,
+        target_lang: str | None = None,
     ) -> list[Memory]:
         """Memories of `user_id` closest in meaning to `transcript`, closest first.
 
@@ -121,17 +122,21 @@ class MemoryStore:
         if not transcript or not transcript.strip():
             return []
         # The query text is embedded by TiDB with the same model as the column.
+        language_filter = " AND target_lang = :target_lang" if target_lang else ""
+        parameters = {"user_id": user_id, "transcript": transcript, "limit": int(limit)}
+        if target_lang:
+            parameters["target_lang"] = target_lang
         with self.engine.connect() as conn:
             rows = conn.execute(
                 text(f"""
                     SELECT {_COLUMNS},
                            VEC_EMBED_COSINE_DISTANCE(embedding, :transcript) AS distance
                     FROM {MEMORIES_TABLE}
-                    WHERE user_id = :user_id AND status = 'active'
+                    WHERE user_id = :user_id AND status = 'active'{language_filter}
                     ORDER BY distance
                     LIMIT :limit
                 """),
-                {"user_id": user_id, "transcript": transcript, "limit": int(limit)},
+                parameters,
             ).all()
         memories = [_to_memory(r, similarity=1.0 - float(r.distance)) for r in rows]
         if min_similarity is not None:
@@ -143,10 +148,28 @@ class MemoryStore:
         with self.engine.connect() as conn:
             rows = conn.execute(
                 text(f"SELECT {_COLUMNS} FROM {MEMORIES_TABLE} "
-                     "WHERE user_id = :user_id ORDER BY created_at"),
+                     "WHERE user_id = :user_id AND status = 'active' ORDER BY created_at"),
                 {"user_id": user_id},
             ).all()
         return [_to_memory(r) for r in rows]
+
+    def update_memory(self, user_id: str, memory_id: int, *, context: str, note: str, metadata: dict[str, Any]) -> None:
+        """Refresh a glossary entry without recomputing its unchanged phrase embedding."""
+        _require_user_id(user_id)
+        with self.engine.begin() as conn:
+            conn.execute(text(f"UPDATE {MEMORIES_TABLE} SET context = :context, note = :note, metadata = :metadata "
+                              "WHERE id = :id AND user_id = :user_id AND status = 'active'"),
+                         {"id": memory_id, "user_id": user_id, "context": context,
+                          "note": note, "metadata": json.dumps(metadata)})
+
+    def forget_memory(self, user_id: str, memory_id: int) -> bool:
+        """Retire only this user's entry; preserve its row for the database owner."""
+        _require_user_id(user_id)
+        with self.engine.begin() as conn:
+            result = conn.execute(text(f"UPDATE {MEMORIES_TABLE} SET status = 'forgotten' "
+                                       "WHERE id = :id AND user_id = :user_id AND status = 'active'"),
+                                  {"id": memory_id, "user_id": user_id})
+            return result.rowcount > 0
 
     def delete_user_memories(self, user_id: str) -> int:
         _require_user_id(user_id)
