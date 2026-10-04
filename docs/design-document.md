@@ -1,4 +1,4 @@
-# Design document: live lecture translation and remembered help
+# Design document: live lecture translation and personal glossary
 
 Updated: October 3, 2026.
 
@@ -15,11 +15,12 @@ their language ability or automatically identify everything they find confusing.
 
 - Live original transcript and Japanese captions: implemented; user reported working.
 - Selected-phrase explanations and ElevenLabs speech: implemented; user reported working.
-- TiDB saving and remembered-help suggestions: merged; real database persistence,
-  matching quality and latency still need verification with configured credentials.
+- The earlier TiDB flow passed real persistence and matching checks on a small sample.
+- Personal glossary: implemented; syntax/structure checked.
+  Its new AI response format, UI, updates and removal need an end-to-end trial.
 
-Full Japanese captions remain enabled. Remembered explanations appear in a separate
-panel; they are not translations of only the saved phrases.
+Full Japanese captions remain enabled. Saved terms are highlighted in the original
+transcript, with brief translated help nearby. This is not a saved-phrases-only caption mode.
 
 ## The three user flows
 
@@ -38,28 +39,34 @@ to TiDB, and it does not play Gemini's generated audio.
 After stopping the microphone, the student selects words in the original transcript,
 chooses an explanation language, and clicks **Explain and listen**.
 
-Gemini explains the phrase using nearby context. ElevenLabs reads that explanation
-aloud. Available explanation languages are Japanese, French, Arabic, Hindi and English;
+Gemini returns a short translation and explanation using nearby context in one request.
+ElevenLabs reads that explanation aloud. Available help languages are Japanese,
+French, Arabic, Hindi and English;
 this selector does not change the live captions.
 
-The phrase, context, explanation and language are saved to TiDB in the background.
+The phrase, context, translation, explanation and language are saved to TiDB in the background.
 If saving fails, the explanation remains usable. Repeated requests reuse text and
 audio cached during the current microphone session; if speech fails, text remains.
 
 ### 3. Recognize a remembered concept
 
-Saved concepts load when a session starts. As new transcript text arrives:
+Saved concepts in the selected help language load when a session starts:
 
-- JavaScript recognizes saved wording locally, ignoring capitalization and punctuation.
+- JavaScript recognizes saved wording locally, ignoring capitalization and punctuation,
+  and highlights exact terms. Hover, click or keyboard focus shows their short translation.
 - TiDB searches by meaning in the background to suggest concepts expressed differently.
-- Exact matches appear as **Recognized**; semantic suggestions appear as **Possibly related**.
+- Help follows the current sentence; semantic suggestions appear as **Possibly related**
+  without claiming a precise location. Active help clears after 12 seconds of silence.
 
 For example, saved **exponential growth** may be suggested when a later speaker says
 **the population is growing exponentially**. This is a possible match, not a guarantee
 that the old explanation fits the new context.
 
-After stopping, the student can listen to a saved explanation without asking Gemini
-to generate it again. ElevenLabs generates speech unless that audio is already cached.
+Saved explanations are collapsed behind **View saved explanation**, with their original
+example. After stopping, listen without another Gemini request, or use **Explain this
+occurrence** to request fresh help for an exact term's current context. ElevenLabs generates
+speech unless cached. **My glossary** retains all saved terms and lets the student remove them.
+Old entries without translations can be upgraded on request; language never switches silently.
 
 ## What each technology does
 
@@ -69,9 +76,9 @@ to generate it again. ElevenLabs generates speech unless that audio is already c
 | Python, FastAPI and Uvicorn | Run the local server and coordinate AI and database requests. |
 | WebSockets | Maintain the continuous audio and caption connection. |
 | Gemini Live Translate | Produce the original transcript and Japanese captions directly from microphone audio. |
-| Gemini Flash Lite | Generate contextual explanations when the student requests them. |
+| Gemini Flash Lite | Generate a short translation and contextual explanation in one requested response. |
 | ElevenLabs | Read explanation text aloud in the selected language. |
-| TiDB with Titan Auto Embedding | Store confusing phrases and explanations, and find related concepts by meaning. |
+| TiDB with Titan Auto Embedding | Store the glossary in the cloud and find related concepts by meaning. |
 
 ## How remembered help avoids extra Gemini requests
 
@@ -83,17 +90,21 @@ Semantic searches examine recent transcript text no more frequently than every
 2.5 seconds, with only one search running per page. Unchanged text is skipped.
 Captions never wait for a search or save to finish.
 
+Translations are stored in existing memory metadata; no table migration is required.
+The shared cloud database filters active entries by browser ID and help language.
+That ID persists locally, but does not authenticate the user or sync across devices.
+
 Provider usage limits still apply. Semantic help can arrive later than captions,
 and its matching threshold needs tuning with real lecture examples.
 
 ## Current limits and next steps
 
-1. **Verify TiDB with the team's database:** save a phrase, refresh, recognize it in
-   later speech, try paraphrases and unrelated sentences, and measure response time.
-   Existing database integration checks used simulated responses.
-2. **Improve phrase interaction:** selection is currently manual and only available
-   after stopping. Hover highlighting and locating paraphrases in the transcript
-   remain future work.
+1. **Try the new glossary flow end to end:** save a translated entry, refresh, recognize
+   it later, change language, update its explanation and remove it. Earlier real TiDB
+   checks matched two of three paraphrases and rejected three unrelated examples;
+   this is not verification of the new flow or a general accuracy benchmark.
+2. **Improve phrase interaction:** new phrases are selected manually after stopping.
+   Locating paraphrases precisely and recognizing unfamiliar concepts remain future work.
 3. **Decide on phrase-only translation:** the current app provides full captions plus
    saved explanations. Showing translations only for remembered phrases needs a
    separate design and implementation.
