@@ -1,4 +1,4 @@
-# Design document: live lecture translation and remembered help
+# Design document: live lecture translation and personal glossary
 
 Updated: October 3, 2026.
 
@@ -16,7 +16,7 @@ their language ability or automatically identify everything they find confusing.
 - Live original transcript and Japanese captions: implemented; user reported working.
 - Selected-phrase explanations and ElevenLabs speech: implemented; user reported working.
 - The earlier TiDB flow passed real persistence and matching checks on a small sample.
-- Personal glossary rework: implemented in this branch; syntax/structure checked.
+- Personal glossary: implemented; syntax/structure checked.
   Its new AI response format, UI, updates and removal need an end-to-end trial.
 
 Full Japanese captions remain enabled. Saved terms are highlighted in the original
@@ -40,8 +40,8 @@ After stopping the microphone, the student selects words in the original transcr
 chooses an explanation language, and clicks **Explain and listen**.
 
 Gemini returns a short translation and explanation using nearby context in one request.
-ElevenLabs reads that explanation
-aloud. Available explanation languages are Japanese, French, Arabic, Hindi and English;
+ElevenLabs reads that explanation aloud. Available help languages are Japanese,
+French, Arabic, Hindi and English;
 this selector does not change the live captions.
 
 The phrase, context, translation, explanation and language are saved to TiDB in the background.
@@ -50,7 +50,7 @@ audio cached during the current microphone session; if speech fails, text remain
 
 ### 3. Recognize a remembered concept
 
-Saved concepts in the selected help language load when a session starts. As new transcript text arrives:
+Saved concepts in the selected help language load when a session starts:
 
 - JavaScript recognizes saved wording locally, ignoring capitalization and punctuation,
   and highlights exact terms. Hover, click or keyboard focus shows their short translation.
@@ -76,9 +76,9 @@ Old entries without translations can be upgraded on request; language never swit
 | Python, FastAPI and Uvicorn | Run the local server and coordinate AI and database requests. |
 | WebSockets | Maintain the continuous audio and caption connection. |
 | Gemini Live Translate | Produce the original transcript and Japanese captions directly from microphone audio. |
-| Gemini Flash Lite | Generate contextual explanations when the student requests them. |
+| Gemini Flash Lite | Generate a short translation and contextual explanation in one requested response. |
 | ElevenLabs | Read explanation text aloud in the selected language. |
-| TiDB with Titan Auto Embedding | Store confusing phrases and explanations, and find related concepts by meaning. |
+| TiDB with Titan Auto Embedding | Store the glossary in the cloud and find related concepts by meaning. |
 
 ## How remembered help avoids extra Gemini requests
 
@@ -89,6 +89,10 @@ Local phrase matching and TiDB semantic search add no Gemini generation requests
 Semantic searches examine recent transcript text no more frequently than every
 2.5 seconds, with only one search running per page. Unchanged text is skipped.
 Captions never wait for a search or save to finish.
+
+Translations are stored in existing memory metadata; no table migration is required.
+The shared cloud database filters active entries by browser ID and help language.
+That ID persists locally, but does not authenticate the user or sync across devices.
 
 Provider usage limits still apply. Semantic help can arrive later than captions,
 and its matching threshold needs tuning with real lecture examples.

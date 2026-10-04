@@ -5,6 +5,17 @@ finds confusing. The demo provides live captions and spoken explanations on dema
 A personal glossary stores confusing phrases, short translations and explanations in TiDB.
 Reading all live translations aloud is a planned feature.
 
+## Current features
+
+- Live original transcript and Japanese captions.
+- Select a confusing phrase after stopping to get a translation and spoken explanation.
+- Save phrases in a personal glossary and highlight exact terms in later speech.
+- Show short help in the selected language; expand explanations when needed.
+- Update an explanation for the current lecture or remove a phrase from the glossary.
+
+The glossary code has syntax and structure checks. Its full microphone/AI/database
+flow still needs a demo trial; merging the code does not verify those runtime results.
+
 ## Repository layout
 
 ```text
@@ -46,7 +57,7 @@ If you already have the repository, open PowerShell in its folder and update it:
 
 ```powershell
 git switch main
-git pull origin main
+git pull --ff-only origin main
 ```
 
 ### 2. Install the libraries
@@ -92,7 +103,8 @@ Missing keys fall back to hidden prompts; ElevenLabs can be blank for captions-o
 
 Keep the terminal open and visit [http://127.0.0.1:8000](http://127.0.0.1:8000)
 in Chrome or Edge. This address opens the app on your computer.
-Press Ctrl+C in the terminal to stop the server. Restart it after changing settings.
+Press Ctrl+C in the terminal to stop the server. Restart it after pulling new code
+or changing settings, then refresh the browser to load the latest page.
 The original
 `& ".\.venv\Scripts\python.exe" ".\live_app.py"` command still works.
 
@@ -109,8 +121,8 @@ explanations, but required for remembering confusing phrases.
    Click **Stop** and wait until the page says **Microphone is off**.
    Then select a confusing phrase in the original transcript. Selection while listening is disabled.
 3. Click **Explain and listen**.
-4. Read Gemini's short phrase translation and explanation, and hear ElevenLabs speak the explanation. Use the audio
-   controls if the browser blocks automatic playback.
+4. Read Gemini's short phrase translation and explanation, and hear ElevenLabs speak
+   the explanation. Use the audio controls if the browser blocks automatic playback.
 
 Repeated requests for the same selected phrase, surrounding context and language
 reuse the explanation and audio in browser memory. Starting a new microphone
@@ -126,6 +138,13 @@ to your existing `.env` using the database's Connect settings, then restart the
 server. This module uses TiDB Cloud Starter on AWS with Auto Embedding support.
 Do not overwrite your Gemini/ElevenLabs keys when adding database settings.
 The app creates the memories table if it is missing.
+
+For a repeatable demo, say **“Today we are studying exponential growth”**, stop,
+select **exponential growth**, and request Japanese help. Wait for the save message,
+refresh, then start a new session and say the phrase again. Expect a highlighted term
+and Japanese translation. In separate fresh sessions, try **“The population is growing
+exponentially”** and an unrelated sentence such as **“The chef is chopping onions.”**
+Paraphrases may be missed; they are suggestions, not guaranteed matches.
 
 1. Stop recording, select a phrase and request an explanation.
 2. The phrase, its context, translation, explanation and help language are saved to TiDB
@@ -167,14 +186,26 @@ public deployment. Saved text goes to the configured database. Audio is cached i
 browser memory only. If TiDB is unconfigured or fails, captions and new explanations
 still work; the page reports the save/search failure separately.
 
+### Where the information is saved
+
+Phrases, translations, context and explanations are saved in the configured TiDB
+Cloud database. The team can share a database, while the app filters records by each
+browser's demo ID. Database credentials grant access to the shared database; the demo
+ID is not a security boundary. Another browser/device has a different ID and does
+not automatically load your glossary.
+
+Only the demo ID and help-language preference persist in browser storage. Generated
+audio and explanation caches are temporary; a new microphone session clears them.
+There is no local database backup if a cloud save fails.
+
 ## Technologies in plain language
 
 - **HTML and JavaScript:** display the page, capture microphone audio, and play explanations.
 - **Python, FastAPI and Uvicorn:** run the local server and coordinate requests to the AI services.
 - **WebSockets:** keep the live audio/caption connection open so updates can arrive while you speak.
-- **Gemini:** translates live microphone audio and generates explanations when you click Explain.
+- **Gemini:** translates live microphone audio and generates phrase translations/explanations when requested.
 - **ElevenLabs:** reads the selected phrase's explanation aloud; it does not currently read all live captions aloud.
-- **TiDB:** stores confusing phrases and explanations, and finds saved concepts related to incoming speech.
+- **TiDB:** stores the personal glossary and finds saved concepts related to incoming speech.
 
 ### Backend contract (for frontend integration)
 
