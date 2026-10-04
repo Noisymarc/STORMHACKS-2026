@@ -26,12 +26,28 @@ store.search_relevant_memories("user-1", "The number of users is growing exponen
 
 ## Run
 
-```bash
-pip install -r backend/tidb/requirements.txt
-cp backend/tidb/.env.example .env      # fill in from TiDB Cloud -> Connect
-python -m backend.tidb.demo            # end-to-end check against TiDB Cloud
-pytest tests/tidb                      # integration tests skip without credentials
+From the repository root, after creating the Python environment described in
+the main README, install the database libraries:
+
+```powershell
+& ".\.venv\Scripts\python.exe" -m pip install -r backend/tidb/requirements.txt
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
+
+Edit the existing root `.env` and fill its `TIDB_*` fields using TiDB Cloud's
+Connect settings. Keep any Gemini and ElevenLabs keys already there.
+Do not copy `backend/tidb/.env.example` over your existing `.env`:
+that would erase the other settings. That example is a reference for the database fields.
+
+Then run the demo or integration tests:
+
+```powershell
+& ".\.venv\Scripts\python.exe" -m backend.tidb.demo
+& ".\.venv\Scripts\python.exe" -m pytest tests/tidb
+```
+
+Database integration tests skip without TiDB credentials. The demo creates a table,
+adds temporary example memories, and deletes those example rows afterward.
 
 ## Files
 
