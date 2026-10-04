@@ -118,6 +118,8 @@ def judge(client, model, utterance, candidates):
             response_schema=RESPONSE_SCHEMA,
             temperature=0,
             max_output_tokens=600,
+            # No tools are used; disabling AFC also silences the SDK's AFC warning.
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         ),
     )
     elapsed = time.perf_counter() - start
@@ -150,6 +152,7 @@ def main() -> None:
         for i, (name, utterance, candidates) in enumerate(CASES):
             if latencies or failures:
                 time.sleep(args.gap)
+            print(f"  [{run * len(CASES) + i + 1}/{total}] {name}", flush=True)
             try:
                 items, elapsed, (p_tok, o_tok) = judge(client, args.model, utterance, candidates)
             except Exception as exc:  # report and keep going
