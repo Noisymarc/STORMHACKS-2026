@@ -66,7 +66,12 @@ async def continuous_translation(websocket: WebSocket):
     """Stream PCM16/16 kHz audio to Gemini and forward transcription deltas."""
     await websocket.accept()
     if gemini_client is None:
-        await websocket.send_json({"type": "error", "message": "Start live_app.py and enter your Gemini API key."})
+        await websocket.send_json(
+            {
+                "type": "error",
+                "message": "Start live_app.py and enter your Gemini API key.",
+            }
+        )
         await websocket.close(code=1011)
         return
 
@@ -75,13 +80,16 @@ async def continuous_translation(websocket: WebSocket):
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
         translation_config=types.TranslationConfig(
-            target_language_code="es", echo_target_language=True,
+            target_language_code="es",
+            echo_target_language=True,
         ),
     )
     try:
         async with gemini_client.aio.live.connect(
-            model=LIVE_TRANSLATION_MODEL, config=config,
+            model=LIVE_TRANSLATION_MODEL,
+            config=config,
         ) as session:
+
             async def receive_captions():
                 # receive() may end at a turn boundary; keep receiving until stopped.
                 while True:
@@ -95,7 +103,9 @@ async def continuous_translation(websocket: WebSocket):
                         ):
                             transcription = getattr(content, field, None)
                             if transcription and transcription.text:
-                                await websocket.send_json({"type": kind, "text": transcription.text})
+                                await websocket.send_json(
+                                    {"type": kind, "text": transcription.text}
+                                )
                         # Gemini also generates audio; this captions demo discards it.
 
             async def send_audio():
@@ -106,9 +116,13 @@ async def continuous_translation(websocket: WebSocket):
                     audio = message.get("bytes")
                     if audio:
                         if len(audio) % 2:
-                            raise ValueError("PCM16 audio must contain complete two-byte samples.")
+                            raise ValueError(
+                                "PCM16 audio must contain complete two-byte samples."
+                            )
                         await session.send_realtime_input(
-                            audio=types.Blob(data=audio, mime_type="audio/pcm;rate=16000"),
+                            audio=types.Blob(
+                                data=audio, mime_type="audio/pcm;rate=16000"
+                            ),
                         )
                     elif message.get("text") == "stop":
                         await session.send_realtime_input(audio_stream_end=True)
@@ -116,8 +130,16 @@ async def continuous_translation(websocket: WebSocket):
                         await asyncio.sleep(2)
                         return
 
-            await websocket.send_json({"type": "status", "message": "Listening — continuous Spanish translation"})
-            tasks = [asyncio.create_task(receive_captions()), asyncio.create_task(send_audio())]
+            await websocket.send_json(
+                {
+                    "type": "status",
+                    "message": "Listening — continuous Spanish translation",
+                }
+            )
+            tasks = [
+                asyncio.create_task(receive_captions()),
+                asyncio.create_task(send_audio()),
+            ]
             try:
                 done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
@@ -131,7 +153,9 @@ async def continuous_translation(websocket: WebSocket):
         pass
     except Exception as exc:
         with suppress(Exception):
-            await websocket.send_json({"type": "error", "message": f"Continuous translation failed: {exc}"})
+            await websocket.send_json(
+                {"type": "error", "message": f"Continuous translation failed: {exc}"}
+            )
             await websocket.close(code=1011)
 
 
@@ -266,7 +290,9 @@ def main():
     if not gemini_key:
         raise SystemExit("A Gemini API key is required to start the live demo.")
     gemini_client = genai.Client(api_key=gemini_key)
-    elevenlabs_client = AsyncElevenLabs(api_key=elevenlabs_key) if elevenlabs_key else None
+    elevenlabs_client = (
+        AsyncElevenLabs(api_key=elevenlabs_key) if elevenlabs_key else None
+    )
 
     import uvicorn
 
