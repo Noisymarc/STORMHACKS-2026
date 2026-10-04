@@ -42,6 +42,10 @@ live_app.py             Launcher preserving the original run command
 
 ## Local demo: Japanese captions and spoken explanations
 
+For an online demo at **classclarity.tech**, see [hosting setup](docs/hosting.md).
+The Render Free configuration is included in `render.yaml`. Deployment and DNS
+verification must finish before the domain will serve this app.
+
 This demo runs on your own computer. You need Git, Python 3.10 or newer,
 a microphone, and a Gemini API key with access to the configured models.
 An ElevenLabs API key is needed for spoken explanations. These are API keys,
